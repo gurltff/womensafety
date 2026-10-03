@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+<title>SafeCircle India</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@500;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css?v=consistent-reference-ui-20261004-7" />
+</head>
+<body>
+<div id="app">
+
+  <!-- ===================== AUTH ===================== -->
+  <div class="screen active" id="screen-auth">
+    <div class="scroll">
+      <div class="auth-hero">
+        <div class="mark">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4.5 8-11V5l-8-3-8 3v6c0 6.5 8 11 8 11z"/></svg>
+        </div>
+        <h1 id="auth-title">Welcome to SafeCircle India</h1>
+        <p id="auth-sub">India's women's safety map. See where reported sexual violence and harassment risk is highest, plan safer routes, and reach help fast.</p>
+      </div>
+
+      <form id="auth-form" autocomplete="on" method="post" action="#">
+        <div class="field"><label>Full name</label><input type="text" id="in-name" name="name" autocomplete="name" placeholder="e.g. Priya Sharma" required/></div>
+        <div class="field"><label>Phone number</label><input type="tel" id="in-phone" name="tel" autocomplete="tel-national" inputmode="numeric" placeholder="10-digit mobile, e.g. 98765 43210" required/></div>
+        <div class="field"><label>Email</label><input type="email" id="in-email" name="email" autocomplete="email" inputmode="email" autocapitalize="off" spellcheck="false" placeholder="you@example.com" required/></div>
+        <button class="btn btn-primary" type="submit" style="margin-bottom:14px;">Send verification codes</button>
+      </form>
+      <div id="verify-block" style="display:none;"><div class="card">
+        <div class="vstep" id="v-dots"></div>
+        <h3 id="v-title" style="margin:0 0 6px;font-size:17px;"></h3>
+        <p id="v-desc" style="margin:0 0 12px;font-size:13.5px;color:var(--ink-soft);"></p>
+        <div id="v-demo" class="demo-banner" style="display:none;"></div>
+        <div class="field"><input class="otp-input" id="v-code" inputmode="numeric" maxlength="8" placeholder="······" autocomplete="one-time-code"/></div>
+        <button class="btn btn-primary" id="v-confirm" type="button" style="margin-bottom:8px;">Verify</button>
+        <button class="btn btn-ghost" id="v-resend" type="button" style="margin-bottom:8px;">Resend code</button>
+        <button class="btn btn-ghost" id="v-back" type="button">Edit my details</button>
+      </div></div>
+
+      <div class="auth-note">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0;margin-top:1px;"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+        <span>Next, we'll ask for location access so SafeCircle can show risk zones near you and, if you ever need it, share your live location during an SOS.</span>
+      </div>
+
+      <div id="locating-status" style="display:none; margin-top:16px;">
+        <div class="card" style="text-align:center;">
+          <p id="locating-msg" style="margin:0 0 12px; color:var(--ink-soft); font-size:13.5px;">Getting your location…</p>
+          <div id="locating-spinner" style="width:26px;height:26px;border:3px solid var(--primary-wash);border-top-color:var(--primary);border-radius:50%;margin:0 auto;animation:spin 0.8s linear infinite;"></div>
+        </div>
+      </div>
+
+      <div id="manual-location-block" style="display:none; margin-top:16px;">
+        <div class="card">
+          <p style="margin:0 0 12px; font-size:13.5px; color:var(--ink-soft);">
+            We couldn't get your GPS location automatically. This can happen if location access was denied, the page isn't served over HTTPS, or the signal timed out — search for your area instead, anywhere in India.
+          </p>
+          <div class="field" style="position:relative;">
+            <label>Search for your city or area</label>
+            <input type="text" id="manual-location-input" placeholder="e.g. Jaipur, Rajasthan" autocomplete="off" />
+            <div id="manual-location-results" class="location-results"></div>
+          </div>
+          <p id="manual-location-selected" style="display:none; margin:-4px 0 12px; font-size:12.5px; color:var(--primary); font-weight:600;"></p>
+          <button class="btn btn-secondary" type="button" id="manual-location-confirm" style="margin-bottom:8px;" disabled>Use this location</button>
+          <button class="btn btn-ghost" type="button" id="manual-location-retry" style="margin-bottom:8px;">Try GPS again</button>
+          <button class="btn btn-primary" type="button" id="manual-location-skip">Skip: just show the India map</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== MAP ===================== -->
+  <div class="screen" id="screen-map">
+    <div id="map-canvas"></div>
+    <div class="map-topbar">
+      <div class="stats-card" id="stats-card">
+        <button class="stats-head" id="stats-toggle" type="button"><span class="live-dot"></span><span>LIVE ESTIMATE</span><span class="stats-head-place">INDIA · REGISTERED CASES</span><span class="chev">▾</span></button>
+        <div class="stats-body">
+          <div class="stats-intro">
+            <span class="eyebrow">PUBLIC SAFETY DATA</span>
+            <p>Modelled from NCRB averages. This is an awareness signal, not a live police feed.</p>
+          </div>
+          <div class="stat big"><label>Rape cases registered · all-time</label><div class="num" id="st-rape-all">—</div><small>2014–22 verified total + estimate since 1 Jan 2023</small></div>
+          <div class="stat-grid">
+            <div class="stat"><label>Rape · today</label><div class="num sm" id="st-rape-day">—</div></div>
+            <div class="stat"><label>Harassment · today</label><div class="num sm" id="st-har-day">—</div></div>
+            <div class="stat"><label>Harassment · since 2023</label><div class="num sm" id="st-har-all">—</div></div>
+            <div class="stat"><label>Next estimate</label><div class="num sm" id="st-next">—</div></div>
+          </div>
+          <div class="hot-title">HIGH-SIGNAL AREAS</div><div id="hot-list"></div>
+        </div>
+      </div>
+      <div class="legend" style="justify-content:space-between; width:100%;">
+        <span style="display:flex;gap:8px;">
+          <span><i style="background:var(--safe)"></i>Safe</span>
+          <span><i style="background:var(--moderate)"></i>Moderate</span>
+          <span><i style="background:var(--risk)"></i>High risk</span>
+        </span>
+        <span style="display:flex;gap:10px;align-items:center;">
+          <button type="button" id="btn-recenter" class="map-action">Recenter</button>
+          <button type="button" id="btn-change-location" class="map-action">Change location</button>
+        </span>
+      </div>
+      <div class="route-card">
+        <div class="route-row">
+          <select id="route-from"><option value="">From: current location</option></select>
+          <select id="route-to"><option value="">To…</option></select>
+        </div>
+        <button class="btn btn-secondary btn-sm" id="btn-route" style="width:100%;">Check route safety</button>
+        <div class="route-result" id="route-result" style="display:none;"></div>
+      </div>
+      <div class="nearby-risk-card collapsed" id="nearby-risk-card" aria-live="polite">
+        <div class="nearby-risk-head">
+          <div>
+            <span class="eyebrow">SAFETY SIGNAL NEAR YOU</span>
+            <strong id="nearby-risk-label">Loading local signals…</strong>
+          </div>
+          <span class="risk-score" id="nearby-risk-score">—</span>
+        </div>
+        <button type="button" id="nearby-risk-toggle" class="risk-toggle">Details <span>▾</span></button>
+        <p id="nearby-risk-detail">Combining public baseline data with recent, verified community reports.</p>
+        <div class="risk-meter"><span id="nearby-risk-meter"></span></div>
+        <small id="nearby-risk-confidence">Confidence: calculating</small>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== FEED ===================== -->
+  <div class="screen" id="screen-feed">
+    <div class="topbar">
+      <h1>Community reports</h1>
+      <p>Recent reports from women near you, most recent first</p>
+    </div>
+    <div class="scroll" id="feed-list"></div>
+  </div>
+
+  <!-- ===================== TIPS ===================== -->
+  <div class="screen" id="screen-tips">
+    <div class="topbar">
+      <h1>Safety tips</h1>
+      <p>Quick guidance, organized for the moment you need it</p>
+    </div>
+    <div class="scroll" id="tips-list"></div>
+  </div>
+
+  <!-- ===================== PROFILE ===================== -->
+  <div class="screen" id="screen-profile">
+    <div class="topbar">
+      <h1>Profile</h1>
+      <p>Your details and how you show up to others nearby</p>
+    </div>
+    <div class="scroll">
+      <div class="profile-head">
+        <div class="avatar" id="profile-initial">P</div>
+        <div>
+          <h2 id="profile-name">—</h2>
+          <p id="profile-phone">—</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="toggle-row">
+          <div>
+            <div style="font-weight:700; font-size:14.5px;">Available to help nearby</div>
+            <p>When on, you can receive SOS alerts from verified users near you and choose to respond.</p>
+          </div>
+          <label class="switch"><input type="checkbox" id="toggle-available"/><span class="slider"></span></label>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 style="margin:0 0 4px; font-size:15px;">Emergency contacts</h3>
+        <p style="margin:0 0 12px; font-size:12.5px; color:var(--ink-soft);">Notified automatically when you send an SOS alert.</p>
+        <div id="contacts-list"></div>
+        <div id="contact-form" style="margin-top:10px; display:none;">
+          <div class="field"><input type="text" id="contact-name" placeholder="Name"/></div>
+          <div class="field"><input type="tel" id="contact-phone" placeholder="Phone number"/></div>
+          <button class="btn btn-primary btn-sm" id="save-contact" style="width:100%;">Save contact</button>
+        </div>
+        <button class="btn btn-ghost btn-sm" id="add-contact-btn" style="width:100%; margin-top:4px;">+ Add contact</button>
+      </div>
+
+      <div class="card">
+        <h3 style="margin:0 0 10px; font-size:15px;">Account</h3>
+        <div class="field"><label>Email</label><input type="email" id="profile-email" readonly/></div>
+        <button class="btn btn-ghost btn-sm" id="logout-btn" style="width:100%;">Log out</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== SOS STATUS SCREEN ===================== -->
+  <div class="screen" id="screen-sos">
+    <div class="scroll">
+      <div class="sos-header">
+        <div class="sos-pulse"></div>
+        <h2>SOS alert active</h2>
+      </div>
+      <div id="sos-steps"></div>
+      <a class="btn btn-danger" href="tel:112" style="text-decoration:none;margin-bottom:10px;">Call 112 (Emergency)</a>
+      <a class="btn btn-secondary" href="tel:181" style="text-decoration:none;margin-bottom:10px;">Women Helpline 181</a>
+      <a class="btn btn-secondary" href="tel:100" style="text-decoration:none;margin-bottom:10px;">Police 100</a>
+      <button class="btn btn-secondary" id="btn-sms" style="margin-bottom:10px;">SMS my contacts my location</button>
+      <button class="btn btn-secondary" id="btn-share-link" style="margin-top:6px;">Copy live location link</button>
+      <button class="btn btn-ghost" id="btn-end-sos" style="margin-top:10px; color:#fff; border-color:rgba(255,255,255,0.25);">I'm safe now — end alert</button>
+    </div>
+  </div>
+
+  <!-- Bottom nav -->
+  <div class="bottomnav" id="bottomnav">
+    <button class="navbtn" data-nav="map"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 20l-5.5 2V6L9 4m0 16l6 2m-6-2V4m6 18l5.5-2V4L15 6m0 14V4m0 0L9 4"/></svg>Map</button>
+    <button class="navbtn" data-nav="feed"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h10"/></svg>Feed</button>
+    <button class="navbtn" data-nav="tips"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-5M12 8h.01"/></svg>Tips</button>
+    <button class="navbtn" data-nav="profile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.5-7 8-7s8 3 8 7"/></svg>Profile</button>
+  </div>
+
+  <!-- SOS floating button -->
+  <button class="sos-fab" id="sos-fab">SOS</button>
+
+  <!-- Zone detail sheet -->
+  <div class="sheet-overlay" id="zone-sheet-overlay">
+    <div class="sheet">
+      <button class="sheet-close" id="zone-sheet-close">✕</button>
+      <div class="sheet-handle"></div>
+      <div class="sheet-head">
+        <span class="tag" id="zone-tag"><span class="tag-dot"></span><span id="zone-tag-text"></span></span>
+        <h3 id="zone-name" style="margin:8px 0 4px; font-size:18px;"></h3>
+        <p id="zone-reason" style="margin:0; font-size:13.5px; color:var(--ink-soft); line-height:1.5;"></p>
+      </div>
+      <div class="sheet-body">
+        <button class="btn btn-secondary btn-sm" id="zone-add-report" style="width:100%; margin-bottom:14px;">+ Add a report for this spot</button>
+        <div id="zone-reports"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add report modal -->
+  <div class="modal-overlay" id="report-modal-overlay">
+    <div class="modal">
+      <h3>Add a report</h3>
+      <p>Your report is anonymous. Reports from verified accounts are weighted more strongly, and older reports gradually lose influence.</p>
+      <div class="field">
+        <label>Severity</label>
+        <select id="report-severity">
+          <option value="green">Low — just noting something</option>
+          <option value="yellow">Moderate — felt unsafe</option>
+          <option value="red">High — harassment or worse</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>What happened?</label>
+        <textarea id="report-text" maxlength="500" placeholder="Describe briefly, e.g. time of day, what you noticed…"></textarea>
+      </div>
+      <div class="btnrow">
+        <button class="btn btn-ghost" id="report-cancel">Cancel</button>
+        <button class="btn btn-primary" id="report-submit">Submit</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- SOS confirm modal -->
+  <div class="modal-overlay" id="sos-confirm-overlay">
+    <div class="modal">
+      <h3>Send SOS alert?</h3>
+      <p>This opens quick actions: call 112, call the 181 Women Helpline, and SMS your emergency contacts a Google Maps link to your location.</p>
+      <div class="btnrow">
+        <button class="btn btn-ghost" id="sos-cancel">Cancel</button>
+        <button class="btn btn-danger" id="sos-confirm">Send SOS</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+<script src="verify.js"></script>
+<script src="stats.js"></script>
+</body>
+</html>
