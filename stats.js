@@ -1,28 +1,35 @@
+'use strict';
+/* =====================================================================
+   SafeCircle India: modelled case counter.
+   Projects NCRB yearly totals forward at their average daily rate.
+   It is an awareness estimate, not a live feed of police data.
+   ===================================================================== */
 (function(){
-const RAPE_DAY=31516/365, HAR_DAY=85300/365, MS=86400000, IST=19800000;
-const SINCE_2023=Date.UTC(2023,0,1)-IST, RAPE_2014_22=299520;
-const $=id=>document.getElementById(id);
-const fmt=(n,d=0)=>n.toLocaleString('en-IN',{minimumFractionDigits:d,maximumFractionDigits:d});
+const RAPE_PER_YEAR = 31516;   // NCRB Crime in India 2022: rape cases registered
+const HAR_PER_YEAR = 85300;    // assault on women with intent to outrage modesty (approx.)
+const RAPE_2014_22 = 299520;   // NCRB rape cases registered, 2014–2022 combined
+const RAPE_DAY = RAPE_PER_YEAR/365, HAR_DAY = HAR_PER_YEAR/365;
+const MS = 86400000, IST = 19800000;
+const SINCE_2023 = Date.UTC(2023, 0, 1) - IST;
+const fmt = (n, d = 0) => n.toLocaleString('en-IN', {minimumFractionDigits:d, maximumFractionDigits:d});
+const card = $('stats-card');
+
 function tick(){
-  const now=Date.now(), dayStart=Math.floor((now+IST)/MS)*MS-IST;
-  const sd=now-dayStart, sy=now-SINCE_2023;
-  const rd=sd/MS*RAPE_DAY, hd=sd/MS*HAR_DAY;
-  $('st-rape-all').textContent=fmt(RAPE_2014_22+sy/MS*RAPE_DAY,2);
-  $('st-rape-day').textContent=fmt(rd,2);
-  $('st-har-day').textContent=fmt(hd,2);
-  $('st-har-all').textContent=fmt(sy/MS*HAR_DAY,0);
-  const left=(Math.ceil(rd)-rd)/RAPE_DAY*MS/1000, m=Math.floor(left/60), s=Math.floor(left%60);
-  $('st-next').textContent=String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');
-  const hl=$('hot-list');
-  if(hl && !hl.children.length && window.state && state.zones){
-    hl.innerHTML=state.zones.filter(z=>z.level!=='green').sort((a,b)=>(a.level==='red'?0:1)-(b.level==='red'?0:1)).slice(0,8)
-      .map(z=>`<button type="button" class="hot-item" data-id="${z.id}"><i style="background:${LEVEL_COLOR[z.level]}"></i>${z.name}<span>${LEVEL_LABEL[z.level]}</span></button>`).join('');
-    hl.querySelectorAll('.hot-item').forEach(b=>b.addEventListener('click',()=>{
-      const z=state.zones.find(x=>x.id===b.dataset.id); if(map&&z){map.flyTo([z.lat,z.lng],9,{duration:1.2}); openZoneSheet(z.id);}
-    }));
-  }
+  if(!card.classList.contains('open') || document.hidden) return;
+  const now = Date.now(), dayStart = Math.floor((now + IST)/MS)*MS - IST;
+  const sd = now - dayStart, sy = now - SINCE_2023;
+  const rd = sd/MS*RAPE_DAY, hd = sd/MS*HAR_DAY;
+  $('st-rape-all').textContent = fmt(RAPE_2014_22 + sy/MS*RAPE_DAY, 0);
+  $('st-rape-day').textContent = fmt(rd, 1);
+  $('st-har-day').textContent = fmt(hd, 1);
+  $('st-har-all').textContent = fmt(sy/MS*HAR_DAY, 0);
+  const left = (Math.ceil(rd) - rd)/RAPE_DAY*MS/1000, m = Math.floor(left/60), s = Math.floor(left%60);
+  $('st-next').textContent = String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
 }
-const card=$('stats-card');
-$('stats-toggle').addEventListener('click',()=>card.classList.toggle('open'));
-tick(); setInterval(tick,1000);
+$('stats-toggle').addEventListener('click', () => {
+  const open = card.classList.toggle('open');
+  $('stats-toggle').setAttribute('aria-expanded', String(open));
+  tick();
+});
+setInterval(tick, 1000);
 })();
