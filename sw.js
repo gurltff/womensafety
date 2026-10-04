@@ -1,9 +1,10 @@
 /* SafeCircle India service worker: makes the app installable and keeps the
    app shell (SOS screen, helplines, toolkit) working offline.
    Bump CACHE when you change any file in SHELL. */
-const CACHE = 'safecircle-v2.0.0';
+const CACHE = 'safecircle-v3.0.0';
 const SHELL = [
-  './', 'index.html', 'styles.css', 'app.js', 'tools.js', 'verify.js', 'stats.js', 'config.js',
+  './', 'index.html', 'styles.css', 'config.js', 'globe-data.js', 'globe.js', 'api.js', 'app.js', 'tools.js',
+  'recorder.js', 'insights.js', 'verify.js', 'stats.js',
   'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png',
   'vendor/leaflet/leaflet.js', 'vendor/leaflet/leaflet.css',
   'vendor/leaflet/images/layers.png', 'vendor/leaflet/images/layers-2x.png'

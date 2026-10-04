@@ -78,6 +78,7 @@ function startCheckin(tell){
   state.checkin = {startAt:Date.now(), endAt, note, mins:checkinMins};
   saveState();
   runCheckinTicker();
+  postCheckin('checkin.started');
   toast(`Check-in set for ${fmtClock(endAt)}`);
   if(tell){
     const pos = currentKnownPosition();
@@ -97,6 +98,7 @@ $('checkin-extend').addEventListener('click', () => {
   state.checkin.alerting = false;
   saveState();
   updateCheckinUI();
+  postCheckin('checkin.extended');
   toast(`Extended to ${fmtClock(state.checkin.endAt)}`);
 });
 function runCheckinTicker(){
@@ -144,13 +146,31 @@ function triggerCheckinAlert(){
     n -= 1;
     $('checkin-alert-count').textContent = Math.max(0, n);
     if(n <= 0){
-      endCheckin(false);
+      postCheckin('checkin.missed');
+      endCheckin(false, true);
       startSOS('Check-in missed' + (c.note ? ': ' + c.note : '') + '. Message your contacts below.');
     }
   }, 1000);
 }
 escHandlers['checkin-alert'] = false; // must be answered explicitly
-function endCheckin(safe){
+/** Lets a server run its own timer, so contacts are alerted even if the phone is locked (see API.md). */
+function postCheckin(type){
+  const c = state.checkin;
+  if(!c) return;
+  const pos = currentKnownPosition();
+  SCApi.postEvent(type, {
+    user:state.user ? {name:state.user.name, phone:state.user.phone} : null,
+    contacts:state.contacts.map(x => ({name:x.name, phone:x.phone})),
+    checkin:{startAt:new Date(c.startAt).toISOString(), endAt:new Date(c.endAt).toISOString(), note:c.note || ''},
+    location:pos ? {lat:pos.lat, lng:pos.lng, accuracy:pos.accuracy || null, approx:!!pos.approx, mapsUrl:mapsLink(pos)} : null,
+    battery:batteryPct,
+    message:type === 'checkin.missed'
+      ? `${state.user ? state.user.name : 'A SafeCircle user'} missed their check-in${c.note ? ' (' + c.note + ')' : ''}. Last location: ${pos ? mapsLink(pos) : 'unknown'}`
+      : `${state.user ? state.user.name : 'A SafeCircle user'} started a check-in${c.note ? ' (' + c.note + ')' : ''}, due ${fmtClock(c.endAt)}.`
+  });
+}
+function endCheckin(safe, silent){
+  if(state.checkin && !silent) postCheckin(safe ? 'checkin.ended' : 'checkin.cancelled');
   clearInterval(checkinTick); clearInterval(checkinAlertTick); clearInterval(checkinBeep);
   vibrate(0);
   if(!$('checkin-alert').hidden) closeOverlay('checkin-alert');
@@ -163,7 +183,7 @@ function endCheckin(safe){
 $('checkin-alert-safe').addEventListener('click', () => endCheckin(true));
 $('checkin-alert-sos').addEventListener('click', () => {
   const note = state.checkin && state.checkin.note;
-  endCheckin(false);
+  endCheckin(false); // tells an alert server to stop its own timer; startSOS sends the alert itself
   startSOS('You asked for help from the check-in timer' + (note ? ' (' + note + ')' : '') + '.');
 });
 

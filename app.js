@@ -113,6 +113,23 @@ const ZONES = [
  {id:'chennai',   name:"Chennai",     level:"green",  lat:13.0827, lng:80.2707, reason:"Moderate reported rates relative to size among NCRB metros. Check NCRB tables for exact figures."}
 ];
 const ZONE_BY_ID = Object.fromEntries(ZONES.map(z => [z.id, z]));
+const ZONES_CACHE_KEY = 'safecircle_zones';
+/** Swap the built-in zones for data from your own API (ZONES_URL in config.js). */
+function applyZones(list, {cache = true} = {}){
+  if(!Array.isArray(list) || !list.length) return false;
+  ZONES.splice(0, ZONES.length, ...list);
+  Object.keys(ZONE_BY_ID).forEach(k => { delete ZONE_BY_ID[k]; });
+  ZONES.forEach(z => { ZONE_BY_ID[z.id] = z; });
+  if(cache){ try{ localStorage.setItem(ZONES_CACHE_KEY, JSON.stringify(list)); }catch(e){} }
+  return true;
+}
+// Zones fetched last time, so the map matches your data even offline.
+if(SCApi.flags.zones){
+  try{
+    const cached = JSON.parse(localStorage.getItem(ZONES_CACHE_KEY) || 'null');
+    if(Array.isArray(cached)) applyZones(cached.filter(SCApi.validZone), {cache:false});
+  }catch(e){}
+}
 
 const LEVEL_COLOR = {red:'#FF3B4E', yellow:'#FFB020', green:'#2FD28F'};
 const LEVEL_LABEL = {red:'High risk', yellow:'Moderate risk', green:'Lower risk'};
@@ -171,7 +188,7 @@ function migrateState(s){
     delete out.zones;
   }
   out.reports = (Array.isArray(out.reports) ? out.reports : []).filter(r =>
-    r && ZONE_BY_ID[r.zoneId] && SEV_RANK[r.sev] !== undefined && typeof r.text === 'string' && Number.isFinite(r.ts));
+    r && typeof r.zoneId === 'string' && SEV_RANK[r.sev] !== undefined && typeof r.text === 'string' && Number.isFinite(r.ts));
   out.contacts = (Array.isArray(out.contacts) ? out.contacts : []).filter(c => c && c.name && c.phone)
     .map((c, i) => ({id:c.id || ('c' + Date.now().toString(36) + i), name:String(c.name), phone:normalizePhone(c.phone) || String(c.phone), relation:c.relation || ''}));
   if(out.center && !(Number.isFinite(out.center.lat) && Number.isFinite(out.center.lng))) out.center = null;
@@ -194,11 +211,17 @@ function reportWeight(r){
   const freshness = Math.max(.15, 1 - ageDays/90);
   return freshness * (r.verified ? 1 : .65);
 }
-function zoneReports(id){ return state.reports.filter(r => r.zoneId === id); }
+let remoteReports = []; // shared community reports from Supabase (see api.js)
+/** Your reports plus shared ones, skipping any for zones that aren't loaded. */
+function allReports(){
+  const ids = new Set(state.reports.map(r => r.id));
+  return [...state.reports, ...remoteReports.filter(r => !ids.has(r.id))].filter(r => ZONE_BY_ID[r.zoneId]);
+}
+function zoneReports(id){ return allReports().filter(r => r.zoneId === id); }
 /**
  * Blends the NCRB baseline with recent community reports. More (and fresher, verified)
- * reports pull harder. Reports can raise a zone's level, but never drop it below its
- * public-data baseline category.
+ * reports pull harder. Reports only ever raise a zone's score: a "low" report in a
+ * high-risk city doesn't make it look safer than the public data says.
  */
 function zoneSignal(z){
   const base = BASE_SCORE[z.level];
@@ -207,7 +230,7 @@ function zoneSignal(z){
   if(!wt) return {score:base, level:z.level, evidence:0, confidence:35};
   const avg = recent.reduce((s, r) => s + SEV_SCORE[r.sev]*reportWeight(r), 0) / wt;
   const influence = wt / (wt + 3);
-  const score = Math.round(Math.max(base*(1 - influence) + avg*influence, base - 15));
+  const score = Math.round(Math.max(base*(1 - influence) + avg*influence, base));
   return {score, level:scoreLevel(score), evidence:recent.length, confidence:Math.min(95, 35 + Math.round(60*influence))};
 }
 function nearbyRisk(pos){
@@ -242,11 +265,16 @@ function showScreen(name){
   document.body.classList.toggle('chrome-hidden', CHROME_HIDDEN.has(name));
   currentScreen = name;
   if(name === 'map' && map) setTimeout(() => map.invalidateSize(), 60);
-  if(name === 'feed') renderFeed();
+  if(name === 'feed'){ renderFeed(); pullSharedReports(); }
   if(name === 'profile') renderProfile();
+  if(name === 'insights' && typeof renderInsights === 'function'){ renderInsights(); pullSharedReports(); }
+  if(name === 'tools' && typeof Recorder !== 'undefined') Recorder.renderList();
+  if(typeof hideTip === 'function') hideTip();
+  if(typeof SCGlobe !== 'undefined') SCGlobe.sync();
   if(typeof updateCheckinUI === 'function') updateCheckinUI();
 }
 document.querySelectorAll('.navbtn').forEach(b => b.addEventListener('click', () => showScreen(b.dataset.nav)));
+document.querySelectorAll('[data-go]').forEach(b => b.addEventListener('click', () => showScreen(b.dataset.go)));
 
 /* ===================== OVERLAYS ===================== */
 const overlayStack = [];
@@ -536,8 +564,11 @@ function buildMap(){
     ]),
     'Street': L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19, attribution:'&copy; OpenStreetMap contributors'})
   };
-  (baseLayers[state.settings.baseLayer] || baseLayers.Dark).addTo(map);
-  map.on('baselayerchange', e => { state.settings.baseLayer = e.name; saveState(); });
+  const startName = baseLayers[state.settings.baseLayer] ? state.settings.baseLayer : 'Dark';
+  baseLayers[startName].addTo(map);
+  map.getContainer().dataset.base = startName.toLowerCase();
+  map.on('baselayerchange', e => { state.settings.baseLayer = e.name; map.getContainer().dataset.base = e.name.toLowerCase(); saveState(); });
+  map.on('move zoomend', updateReadout);
   L.control.attribution({position:'bottomleft'}).addTo(map);
   L.control.layers(baseLayers, null, {position:'bottomleft'}).addTo(map);
   L.control.zoom({position:'bottomright'}).addTo(map);
@@ -545,6 +576,23 @@ function buildMap(){
   zoneLayer = L.layerGroup().addTo(map);
   helpLayer = L.layerGroup().addTo(map);
   setInitialView();
+  updateReadout();
+}
+let readoutPending = false;
+function updateReadout(){
+  if(readoutPending || !map) return;
+  readoutPending = true;
+  requestAnimationFrame(() => {
+    readoutPending = false;
+    const c = map.getCenter();
+    $('map-readout').textContent = `${Math.abs(c.lat).toFixed(4)}°${c.lat >= 0 ? 'N' : 'S'}  ${Math.abs(c.lng).toFixed(4)}°${c.lng >= 0 ? 'E' : 'W'}  Z${map.getZoom()}`;
+  });
+}
+/** Expanding radar rings where you are, after Locate. */
+function scanPing(p){
+  if(!map) return;
+  const m = L.marker([p.lat, p.lng], {icon:L.divIcon({className:'', html:'<div class="scan-ping"><i></i><i></i><i></i></div>', iconSize:[180, 180]}), interactive:false, keyboard:false}).addTo(map);
+  setTimeout(() => map.removeLayer(m), 2600);
 }
 function inIndia(c){ return c && c.lat > 6 && c.lat < 36 && c.lng > 68 && c.lng < 98; }
 function setInitialView(){
@@ -586,14 +634,14 @@ function renderZonesOnMap(){
   ZONES.forEach(z => {
     const sig = zoneSignal(z), lvl = sig.level, col = LEVEL_COLOR[lvl];
     L.circle([z.lat, z.lng], {radius:ZONE_RADIUS[lvl], color:col, weight:1, opacity:.55, fillColor:col, fillOpacity:lvl === 'red' ? .24 : .14, interactive:false}).addTo(zoneLayer);
-    const sz = lvl === 'red' ? 22 : lvl === 'yellow' ? 17 : 13;
+    const sz = lvl === 'red' ? 30 : lvl === 'yellow' ? 24 : 19;
     const pin = L.marker([z.lat, z.lng], {
-      icon:L.divIcon({className:'', html:`<div class="zpin ${lvl}" style="--c:${col};--s:${sz}px"><b></b><i></i></div>`, iconSize:[sz*2, sz*2]}),
+      icon:L.divIcon({className:'', html:`<div class="reticle ${lvl}" style="--c:${col};--s:${sz}px"><b></b><i></i></div>`, iconSize:[sz*2, sz*2]}),
       zIndexOffset:lvl === 'red' ? 1000 : lvl === 'yellow' ? 500 : 0,
       title:`${z.name}: ${LEVEL_LABEL[lvl]}`
     }).addTo(zoneLayer);
     pin.on('click', () => openZoneSheet(z.id));
-    pin.bindTooltip(`${escapeHtml(z.name)} · ${LEVEL_LABEL[lvl]}`, {direction:'top', offset:[0, -sz], className:'zone-label ' + lvl});
+    pin.bindTooltip(`${escapeHtml(z.name)} <span>${sig.score}</span>`, {direction:'top', offset:[0, -sz*.6], className:'zone-label ' + lvl});
   });
 }
 
@@ -609,6 +657,7 @@ $('btn-recenter').addEventListener('click', async () => {
     saveState();
     updateUserMarker(pos);
     map.flyTo([pos.lat, pos.lng], Math.max(map.getZoom(), 14), {duration:.8});
+    map.once('moveend', () => scanPing(pos));
     renderNearbyRisk();
   }else if(state.center){
     map.flyTo([state.center.lat, state.center.lng], Math.max(map.getZoom(), 11), {duration:.8});
@@ -642,7 +691,7 @@ function renderNearbyRisk(){
     $('nearby-risk-score').textContent = '—';
     meter.style.width = '0';
     $('nearby-risk-detail').textContent = `No mapped city or recent report within ${NEARBY_RANGE/1000} km. That isn't the same as safe: stay aware and check your route.`;
-    $('nearby-risk-confidence').textContent = 'Coverage: 13 NCRB metro cities';
+    $('nearby-risk-confidence').textContent = `Coverage: ${ZONES.length} mapped cities`;
     return;
   }
   const level = scoreLevel(r.score);
@@ -750,7 +799,7 @@ async function checkRoute(){
     lastRoute = {start, end, dist, dur, arrive};
     const head = hits.length
       ? `<strong style="color:${col}">Heads up.</strong> This route passes through ${hits.length === 1 ? 'a flagged area' : hits.length + ' flagged areas'}:`
-      : `<strong style="color:${LEVEL_COLOR.green}">No flagged areas</strong> on this route. Mapped coverage is limited to 13 cities, so stay aware.`;
+      : `<strong style="color:${LEVEL_COLOR.green}">No flagged areas</strong> on this route. Mapped coverage is limited to ${ZONES.length} cities, so stay aware.`;
     const zonesHtml = hits.length ? `<ul class="route-zones">${hits.map(x => `<li><i style="background:${LEVEL_COLOR[x.sig.level]}"></i>${escapeHtml(x.z.name)} <span>${LEVEL_LABEL[x.sig.level]}</span></li>`).join('')}</ul>` : '';
     const res = $('route-result');
     res.hidden = false;
@@ -797,7 +846,7 @@ function renderZoneSheet(){
   $('zone-score-bar').style.background = LEVEL_COLOR[sig.level];
   const dist = state.center ? ` · ${fmtDist(distanceMeters(state.center, z))} from you` : '';
   $('zone-meta').textContent = `Signal ${sig.score}/100 · NCRB baseline: ${LEVEL_LABEL[z.level].toLowerCase()} · ${sig.evidence} recent report${sig.evidence === 1 ? '' : 's'}${dist}`;
-  $('zone-source').textContent = IN_SRC;
+  $('zone-source').textContent = z.source || IN_SRC;
   renderZoneReports(z);
 }
 $('zone-sheet-close').addEventListener('click', () => closeOverlay('zone-sheet-overlay'));
@@ -814,7 +863,7 @@ $('zone-route').addEventListener('click', () => {
 
 function reportHTML(r, withZone){
   const cats = (r.cats || []).map(c => `<span class="mini-chip">${escapeHtml(CAT_LABEL[c] || c)}</span>`).join('');
-  const meta = [r.verified ? '✓ verified account' : 'anonymous', r.tod ? TOD_LABEL[r.tod] : '', timeAgo(r.ts)].filter(Boolean).join(' · ');
+  const meta = [r.mine === false ? 'community' : r.shared ? 'you · shared' : 'you · this device', r.verified ? '✓ verified' : '', r.tod ? TOD_LABEL[r.tod] : '', timeAgo(r.ts)].filter(Boolean).join(' · ');
   return `
     <article class="${withZone ? 'feed-item' : 'report-item'}">
       <div class="meta">
@@ -879,19 +928,28 @@ $('report-form').addEventListener('submit', e => {
   if(SEV_RANK[sev] === undefined){ toast('Choose a valid severity'); return; }
   if(text.length < 12){ toast('Add a little more detail so others can judge the signal'); $('report-text').focus(); return; }
   const cats = [...$('report-cats').querySelectorAll('.chip.active')].map(c => c.dataset.cat);
-  state.reports.unshift({
+  const report = {
     id:'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
     zoneId, sev, text, ts:Date.now(), verified:!!state.verified, cats, tod:reportTod, mine:true
-  });
+  };
+  state.reports.unshift(report);
   saveState();
   closeOverlay('report-modal-overlay');
   afterReportsChanged();
   toast('Report added. Thank you for keeping others safe');
+  if(SCApi.flags.sharedReports){
+    SCApi.pushReport(report).then(res => {
+      if(res.ok){ report.shared = true; saveState(); renderFeed(); toast('Report shared with the community'); }
+      else toast('Saved on this device. Sharing failed: ' + (res.error || 'offline'));
+    });
+  }
 });
 async function deleteReport(id){
   const ok = await confirmDialog({title:'Delete this report?', body:'It will be removed from this device and stop affecting the map.', ok:'Delete', danger:true});
   if(!ok) return;
-  state.reports = state.reports.filter(r => r.id !== id);
+  const r = state.reports.find(x => x.id === id);
+  if(r && r.shared) SCApi.deleteReport(id);
+  state.reports = state.reports.filter(x => x.id !== id);
   saveState();
   afterReportsChanged();
   toast('Report deleted');
@@ -901,7 +959,19 @@ function afterReportsChanged(){
   renderNearbyRisk();
   renderHotList();
   renderFeed();
+  if(typeof refreshVisuals === 'function') refreshVisuals();
   if($('zone-sheet-overlay').classList.contains('active')) renderZoneSheet();
+}
+const afterZonesChanged = afterReportsChanged;
+let lastPull = 0;
+/** Fetch shared community reports (at most once a minute). */
+async function pullSharedReports(force){
+  if(!SCApi.flags.sharedReports || (!force && Date.now() - lastPull < 60000)) return;
+  lastPull = Date.now();
+  try{
+    const list = await SCApi.pullReports();
+    if(list){ remoteReports = list; afterReportsChanged(); }
+  }catch(e){}
 }
 $('zone-reports').addEventListener('click', e => {
   const d = e.target.closest('[data-del]');
@@ -923,7 +993,8 @@ $('feed-new-report').addEventListener('click', () => {
 });
 function renderFeed(){
   const list = $('feed-list');
-  if(!state.reports.length){
+  const reports = allReports();
+  if(!reports.length){
     list.innerHTML = `<div class="empty">
       <div class="empty-ico" aria-hidden="true">✎</div>
       <h3>No reports yet</h3>
@@ -932,7 +1003,7 @@ function renderFeed(){
     </div>`;
     return;
   }
-  const all = state.reports.filter(r => feedFilter === 'all' || r.sev === feedFilter).sort((a, b) => b.ts - a.ts);
+  const all = reports.filter(r => feedFilter === 'all' || r.sev === feedFilter).sort((a, b) => b.ts - a.ts);
   list.innerHTML = all.length ? all.map(r => reportHTML(r, true)).join('') : `<p class="muted">No reports at this level.</p>`;
 }
 $('feed-list').addEventListener('click', e => {
@@ -1089,8 +1160,26 @@ $('export-btn').addEventListener('click', () => {
 $('logout-btn').addEventListener('click', async () => {
   const ok = await confirmDialog({title:'Log out and erase?', body:'This deletes your profile, contacts, reports and settings from this device. It cannot be undone.', ok:'Erase everything', danger:true});
   if(!ok) return;
-  try{ localStorage.removeItem(STORE_KEY); }catch(e){}
+  try{ localStorage.removeItem(STORE_KEY); localStorage.removeItem(ZONES_CACHE_KEY); }catch(e){}
+  if(typeof Recorder !== 'undefined') await Recorder.clearAll();
   location.reload();
+});
+
+/** Profile card listing which outside services (APIs) are switched on. */
+function renderConnections(){
+  const f = SCApi.flags;
+  const rows = [
+    ['Real email + SMS codes', f.supabase, 'Supabase auth'],
+    ['Shared community reports', f.sharedReports, 'Supabase table'],
+    ['SOS & check-in alerts', f.webhook, 'Your webhook'],
+    ['Custom zone data', f.zones, 'Your JSON API']
+  ];
+  $('api-list').innerHTML = rows.map(([name, on, via]) => `<div class="api-row"><span class="api-dot${on ? ' on' : ''}"></span><span>${name}<small>${via}</small></span><b>${on ? 'ON' : 'OFF'}</b></div>`).join('');
+  $('api-test').hidden = !f.webhook;
+}
+$('api-test').addEventListener('click', () => {
+  SCApi.postEvent('test', {user:state.user ? {name:state.user.name} : null, message:'Test alert from SafeCircle. If you can read this, the webhook works.'});
+  toast('Test event sent to your webhook');
 });
 
 /* ===================== SOS ===================== */
@@ -1125,13 +1214,16 @@ $('sos-now').addEventListener('click', () => { clearInterval(sosCountTimer); clo
 function startSOS(reason){
   clearInterval(sosCountTimer);
   if(!$('sos-countdown').hidden) closeOverlay('sos-countdown');
-  if(!sos.active){
+  const fresh = !sos.active;
+  if(fresh){
     sos.active = true;
     sos.startedAt = Date.now();
     sos.address = ''; sos.addressPos = null;
     sos.pos = currentKnownPosition();
   }
   sos.reason = reason || sos.reason || '';
+  if(fresh && SCApi.postEvent('sos.started', sosPayload())){ sos.postedAt = Date.now(); sos.postedPos = sos.pos; }
+  $('sos-webhook').hidden = !SCApi.flags.webhook;
   showScreen('sos');
   $('sos-banner').hidden = !sos.reason;
   $('sos-banner').textContent = sos.reason;
@@ -1148,6 +1240,10 @@ function startSOS(reason){
         renderSOSLocation();
         updateUserMarker(sos.pos);
         maybeReverseGeocode();
+        // keep your alert service up to date: every minute, or when you've moved 150 m
+        if(SCApi.flags.webhook && (Date.now() - (sos.postedAt || 0) > 60000 || !sos.postedPos || distanceMeters(sos.postedPos, sos.pos) > 150)){
+          SCApi.postEvent('sos.location', sosPayload()); sos.postedAt = Date.now(); sos.postedPos = sos.pos;
+        }
         if(!sos.policeLoaded) loadSOSPolice();
       },
       () => { if(!sos.pos) $('sos-loc-sub').textContent = 'GPS unavailable. Messages will use your saved area.'; },
@@ -1237,6 +1333,23 @@ async function loadSOSPolice(){
   }finally{ sos.policeBusy = false; }
 }
 
+/** What the SOS webhook receives (see API.md). */
+function sosPayload(extra = {}){
+  const p = sos.pos;
+  return {
+    user:state.user ? {name:state.user.name, phone:state.user.phone} : null,
+    contacts:state.contacts.map(c => ({name:c.name, phone:c.phone, relation:c.relation || ''})),
+    location:p ? {lat:p.lat, lng:p.lng, accuracy:p.accuracy || null, approx:!!p.approx, mapsUrl:mapsLink(p)} : null,
+    address:sos.address || null,
+    battery:batteryPct,
+    reason:sos.reason || null,
+    medical:state.medical,
+    startedAt:sos.startedAt ? new Date(sos.startedAt).toISOString() : null,
+    message:composeSOSMessage(p),
+    ...extra
+  };
+}
+
 /* ---------- Messages: SMS / WhatsApp / share ---------- */
 function composeSOSMessage(pos){
   const lines = [(state.settings.sosMessage || 'I need help. Please call me or come to my location.').trim()];
@@ -1280,10 +1393,12 @@ async function endSOS(){
   const tell = state.contacts.length
     ? await confirmDialog({title:"Glad you're safe", body:"Let your emergency contacts know you're okay?", ok:"Send \"I'm safe\" SMS", cancel:'Just end alert'})
     : false;
+  SCApi.postEvent('sos.ended', sosPayload({endedAt:new Date().toISOString(), safe:true, message:`${state.user ? state.user.name : 'The user'} ended the SOS alert and says they are safe.`}));
   if(sos.watchId !== null && navigator.geolocation) navigator.geolocation.clearWatch(sos.watchId);
   sos.watchId = null;
   clearInterval(sos.tick);
-  sos.active = false; sos.reason = ''; sos.policeLoaded = false; sos.policeFailedAt = 0;
+  sos.active = false; sos.reason = ''; sos.policeLoaded = false; sos.policeFailedAt = 0; sos.postedAt = 0; sos.postedPos = null;
+  if(typeof Recorder !== 'undefined' && Recorder.isRecording()) Recorder.stop();
   releaseWakeLock('sos');
   if(typeof stopSiren === 'function') stopSiren();
   showScreen(state.user ? 'map' : 'auth');
@@ -1295,6 +1410,8 @@ async function endSOS(){
 function boot(){
   initBattery();
   renderTips();
+  if(typeof initHero === 'function') initHero();
+  if(typeof initInsights === 'function') initInsights();
   if(state.user && state.verified){
     if(state.center || state.indiaView) initApp();
     else requestLocationThenStart();
@@ -1303,6 +1420,11 @@ function boot(){
     showAuthStep('form');
   }
   if(typeof initTools === 'function') initTools();
+  renderConnections();
+  pullSharedReports(true);
+  if(SCApi.flags.zones){
+    SCApi.fetchZones().then(list => { if(list && applyZones(list)) afterZonesChanged(); }).catch(() => {});
+  }
   // Home-screen shortcuts from the manifest: ?action=sos | fakecall
   const action = new URLSearchParams(location.search).get('action');
   if(action){

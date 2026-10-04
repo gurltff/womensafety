@@ -1,14 +1,14 @@
 {
   "name": "SafeCircle India",
   "short_name": "SafeCircle",
-  "description": "Women's safety map for India with route checks, one-tap SOS, fake call, siren and check-in timer.",
+  "description": "Women's safety map for India with route checks, one-tap SOS, fake call, siren and check-in timer, evidence recorder and safety insights.",
   "id": "./",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#09090B",
-  "theme_color": "#09090B",
+  "background_color": "#050505",
+  "theme_color": "#050505",
   "categories": ["lifestyle", "navigation", "utilities"],
   "icons": [
     {"src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"},

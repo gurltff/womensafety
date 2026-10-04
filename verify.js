@@ -5,29 +5,13 @@
    Without keys, it runs in demo mode and shows the code on screen.
    ===================================================================== */
 (function(){
-const CFG = window.SC_CONFIG || {};
-const HAS_BACKEND = !!(CFG.SUPABASE_URL && CFG.SUPABASE_ANON_KEY);
+const HAS_BACKEND = SCApi.flags.supabase;
 const CODE_TTL = 10*60*1000, MAX_ATTEMPTS = 5, RESEND_COOLDOWN = 30*1000;
 
 let pend = null, step = 'email', demo = null, codeExpiresAt = 0, attempts = 0;
-let lastSentAt = 0, lastTarget = '', cooldownTick = null, sbPromise = null;
+let lastSentAt = 0, lastTarget = '', cooldownTick = null;
 
-/** Loads supabase-js only when a backend is configured, so demo mode stays light. */
-function getSupabase(){
-  if(!HAS_BACKEND) return Promise.resolve(null);
-  if(!sbPromise){
-    sbPromise = new Promise(resolve => {
-      const make = () => resolve(window.supabase ? window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_ANON_KEY) : null);
-      if(window.supabase) return make();
-      const s = document.createElement('script');
-      s.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';
-      s.onload = make;
-      s.onerror = () => { sbPromise = null; resolve(null); };
-      document.head.appendChild(s);
-    });
-  }
-  return sbPromise;
-}
+const getSupabase = SCApi.getSupabase; // shared client, see api.js
 
 function phoneOK(p){
   const d = p.replace(/\D/g, '').replace(/^91(?=\d{10}$)/, '').replace(/^0(?=\d{10}$)/, '');

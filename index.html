@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<meta name="theme-color" content="#09090B" />
-<meta name="description" content="SafeCircle India: a women's safety map with safer route checks, one-tap SOS, fake call, siren, check-in timer and nearby police and hospitals." />
+<meta name="theme-color" content="#050505" />
+<meta name="description" content="SafeCircle India: a women's safety map with route checks, one-tap SOS, check-in timer, fake call, siren, evidence recorder and live safety insights." />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <meta name="apple-mobile-web-app-title" content="SafeCircle" />
@@ -15,69 +15,83 @@
 <link rel="stylesheet" href="vendor/leaflet/leaflet.css" />
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@500;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="logo" viewBox="0 0 64 64">
+    <path d="M32 5 L59 32 L32 59 L5 32 Z" fill="none" stroke="currentColor" stroke-width="3" stroke-linejoin="round"/>
+    <path d="M32 5 V29 M5 32 L22.5 38.5 M59 32 L41.5 38.5" fill="none" stroke="currentColor" stroke-width="2.4"/>
+    <path d="M32 29 L41.5 38.5 L32 48 L22.5 38.5 Z" fill="#FF8A2B"/>
+  </symbol>
+</svg>
 <div id="app">
 
   <!-- ===================== AUTH ===================== -->
   <section class="screen active" id="screen-auth" aria-label="Sign in">
-    <div class="scroll">
-      <div class="auth-hero">
-        <div class="mark" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4.5 8-11V5l-8-3-8 3v6c0 6.5 8 11 8 11z"/><path d="M9 12l2 2 4-4"/></svg>
+    <canvas id="hero-globe" class="hero-globe" aria-hidden="true"></canvas>
+    <div class="hero-hud" aria-hidden="true">
+      <div class="hh-brand"><svg class="logo"><use href="#logo"/></svg><div><b>SAFECIRCLE</b><small>INDIA · SAFETY GRID</small></div></div>
+      <div class="hh-clock"><b id="hero-clock">IST --:--:--</b><small id="hero-date">—</small></div>
+      <div class="hh-meta">NCRB 2014–2023<br>MODEL · ONLINE</div>
+      <div class="hh-ticker" id="hero-ticker"></div>
+    </div>
+    <div class="scroll auth-scroll">
+      <div class="auth-panel">
+        <div class="auth-hero">
+          <span class="eyebrow">// WOMEN'S SAFETY GRID · भारत</span>
+          <h1 id="auth-title" class="glitch">Welcome to SafeCircle India</h1>
+          <p id="auth-sub">See where registered sexual violence and harassment cases are highest, check a route before you go, and reach help in one tap.</p>
         </div>
-        <h1 id="auth-title">Welcome to SafeCircle India</h1>
-        <p id="auth-sub">India's women's safety map. See where registered sexual violence and harassment cases are highest, check a route before you go, and reach help in one tap.</p>
-      </div>
 
-      <form id="auth-form" autocomplete="on" novalidate>
-        <div class="field"><label for="in-name">Full name</label><input type="text" id="in-name" name="name" autocomplete="name" placeholder="e.g. Priya Sharma" required /></div>
-        <div class="field"><label for="in-phone">Phone number</label><input type="tel" id="in-phone" name="tel" autocomplete="tel-national" inputmode="numeric" placeholder="10-digit mobile, e.g. 98765 43210" required /></div>
-        <div class="field"><label for="in-email">Email</label><input type="email" id="in-email" name="email" autocomplete="email" inputmode="email" autocapitalize="off" spellcheck="false" placeholder="you@example.com" required /></div>
-        <button class="btn btn-primary" type="submit">Send verification codes</button>
-      </form>
+        <form id="auth-form" autocomplete="on" novalidate>
+          <div class="field"><label for="in-name">Full name</label><input type="text" id="in-name" name="name" autocomplete="name" placeholder="e.g. Priya Sharma" required /></div>
+          <div class="field"><label for="in-phone">Phone number</label><input type="tel" id="in-phone" name="tel" autocomplete="tel-national" inputmode="numeric" placeholder="10-digit mobile, e.g. 98765 43210" required /></div>
+          <div class="field"><label for="in-email">Email</label><input type="email" id="in-email" name="email" autocomplete="email" inputmode="email" autocapitalize="off" spellcheck="false" placeholder="you@example.com" required /></div>
+          <button class="btn btn-primary" type="submit">Send verification codes <span aria-hidden="true">→</span></button>
+        </form>
 
-      <div id="verify-block" hidden>
-        <div class="card">
-          <div class="vstep" id="v-dots"></div>
-          <h3 id="v-title" class="card-title"></h3>
-          <p id="v-desc" class="muted"></p>
-          <div id="v-demo" class="demo-banner" hidden></div>
-          <div class="field"><label for="v-code" class="sr-only">Verification code</label><input class="otp-input" id="v-code" inputmode="numeric" maxlength="8" placeholder="······" autocomplete="one-time-code" /></div>
-          <button class="btn btn-primary" id="v-confirm" type="button">Verify</button>
-          <div class="btn-pair">
-            <button class="btn btn-ghost" id="v-resend" type="button">Resend code</button>
-            <button class="btn btn-ghost" id="v-back" type="button">Edit details</button>
+        <div id="verify-block" hidden>
+          <div class="card">
+            <div class="vstep" id="v-dots"></div>
+            <h3 id="v-title" class="card-title"></h3>
+            <p id="v-desc" class="muted"></p>
+            <div id="v-demo" class="demo-banner" hidden></div>
+            <div class="field"><label for="v-code" class="sr-only">Verification code</label><input class="otp-input" id="v-code" inputmode="numeric" maxlength="8" placeholder="······" autocomplete="one-time-code" /></div>
+            <button class="btn btn-primary" id="v-confirm" type="button">Verify</button>
+            <div class="btn-pair">
+              <button class="btn btn-ghost" id="v-resend" type="button">Resend code</button>
+              <button class="btn btn-ghost" id="v-back" type="button">Edit details</button>
+            </div>
           </div>
         </div>
-      </div>
 
-      <div class="auth-note" id="auth-note">
-        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
-        <span>Your details, contacts and reports are stored only on this device. Next, we'll ask for location access so SafeCircle can show risk near you and share your live location during an SOS.</span>
-      </div>
-
-      <div id="locating-status" hidden>
-        <div class="card center">
-          <p id="locating-msg" class="muted">Getting your location…</p>
-          <div class="spinner" aria-hidden="true"></div>
+        <div class="auth-note" id="auth-note">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+          <span>Your details, contacts and reports stay on this device. Next, we'll ask for location so SafeCircle can show risk near you and share your live location during an SOS.</span>
         </div>
-      </div>
 
-      <div id="manual-location-block" hidden>
-        <div class="card">
-          <p id="manual-location-msg" class="muted">We couldn't get your GPS location automatically. Search for your area instead, anywhere in India.</p>
-          <div class="field">
-            <label for="manual-location-input">Search for your city or area</label>
-            <input type="text" id="manual-location-input" placeholder="e.g. Jaipur, Rajasthan" autocomplete="off" />
-            <div id="manual-location-results" class="location-results" role="listbox"></div>
+        <div id="locating-status" hidden>
+          <div class="card center">
+            <div class="radar" aria-hidden="true"><i></i></div>
+            <p id="locating-msg" class="muted">Getting your location…</p>
           </div>
-          <p id="manual-location-selected" class="selected-place" hidden></p>
-          <button class="btn btn-secondary" type="button" id="manual-location-confirm" disabled>Use this location</button>
-          <button class="btn btn-ghost" type="button" id="manual-location-retry">Try GPS again</button>
-          <button class="btn btn-primary" type="button" id="manual-location-skip">Skip: just show the India map</button>
+        </div>
+
+        <div id="manual-location-block" hidden>
+          <div class="card">
+            <p id="manual-location-msg" class="muted">We couldn't get your GPS location automatically. Search for your area instead, anywhere in India.</p>
+            <div class="field">
+              <label for="manual-location-input">Search for your city or area</label>
+              <input type="text" id="manual-location-input" placeholder="e.g. Jaipur, Rajasthan" autocomplete="off" />
+              <div id="manual-location-results" class="location-results" role="listbox"></div>
+            </div>
+            <p id="manual-location-selected" class="selected-place" hidden></p>
+            <button class="btn btn-secondary" type="button" id="manual-location-confirm" disabled>Use this location</button>
+            <button class="btn btn-ghost" type="button" id="manual-location-retry">Try GPS again</button>
+            <button class="btn btn-primary" type="button" id="manual-location-skip">Skip: just show the India map</button>
+          </div>
         </div>
       </div>
     </div>
@@ -86,6 +100,8 @@
   <!-- ===================== MAP ===================== -->
   <section class="screen" id="screen-map" aria-label="Safety map">
     <div id="map-canvas"></div>
+    <div class="map-crosshair" aria-hidden="true"></div>
+    <div class="map-readout" id="map-readout" aria-hidden="true">—</div>
     <div class="map-topbar">
       <div class="stats-card" id="stats-card">
         <button class="stats-head" id="stats-toggle" type="button" aria-expanded="false" aria-controls="stats-body"><span class="live-dot" aria-hidden="true"></span><span>MODELLED ESTIMATE</span><span class="stats-head-place">INDIA · REGISTERED CASES</span><span class="chev" aria-hidden="true">▾</span></button>
@@ -119,7 +135,7 @@
       </div>
 
       <div class="route-card collapsed" id="route-card">
-        <button type="button" class="card-toggle" id="route-toggle" aria-expanded="false"><span>Check a route</span><span class="chev" aria-hidden="true">▾</span></button>
+        <button type="button" class="card-toggle" id="route-toggle" aria-expanded="false"><span><span class="tagbox">B</span>Check a route</span><span class="chev" aria-hidden="true">▾</span></button>
         <div class="route-body">
           <div class="place-field">
             <input type="text" id="route-from" placeholder="From: my current location" autocomplete="off" aria-label="Start point" />
@@ -137,13 +153,13 @@
       <div class="nearby-risk-card collapsed" id="nearby-risk-card" aria-live="polite">
         <div class="nearby-risk-head">
           <div>
-            <span class="eyebrow">SAFETY SIGNAL NEAR YOU</span>
+            <span class="eyebrow"><span class="tagbox">C</span>SAFETY SIGNAL NEAR YOU</span>
             <strong id="nearby-risk-label">Loading local signals…</strong>
           </div>
           <span class="risk-score" id="nearby-risk-score">—</span>
         </div>
         <button type="button" id="nearby-risk-toggle" class="risk-toggle" aria-expanded="false">Details <span aria-hidden="true">▾</span></button>
-        <p id="nearby-risk-detail">Combining public baseline data with your recent community reports.</p>
+        <p id="nearby-risk-detail">Combining public baseline data with recent community reports.</p>
         <div class="risk-meter"><span id="nearby-risk-meter"></span></div>
         <small id="nearby-risk-confidence">Confidence: calculating</small>
       </div>
@@ -155,8 +171,9 @@
     <div class="topbar">
       <div class="topbar-row">
         <div>
-          <h1>Community reports</h1>
-          <p>Reports saved on this device, most recent first</p>
+          <span class="eyebrow">02 // REPORTS</span>
+          <h1>Community reports <span class="hi">रिपोर्ट</span></h1>
+          <p>Most recent first. Anonymous, and they fade with age.</p>
         </div>
         <button class="btn btn-primary btn-sm" id="feed-new-report" type="button">+ Report</button>
       </div>
@@ -173,7 +190,8 @@
   <!-- ===================== TOOLKIT ===================== -->
   <section class="screen" id="screen-tools" aria-label="Safety toolkit">
     <div class="topbar">
-      <h1>Safety toolkit</h1>
+      <span class="eyebrow">03 // TOOLKIT</span>
+      <h1>Safety toolkit <span class="hi">सुरक्षा किट</span></h1>
       <p>Fast tools for when something feels off</p>
     </div>
     <div class="scroll">
@@ -188,7 +206,7 @@
         </div>
 
         <div class="card tool" id="tool-checkin">
-          <div class="tool-head"><span class="tool-ico ico-timer" aria-hidden="true"></span><div><h3>Check-in timer</h3><p>Walking home or taking a cab? If you don't tap “I'm safe” in time, SafeCircle raises an alarm and opens SOS.</p></div></div>
+          <div class="tool-head"><span class="tool-ico ico-timer" aria-hidden="true"></span><div><h3>Check-in timer</h3><p>Walking home or in a cab? If you don't tap “I'm safe” in time, SafeCircle raises an alarm and opens SOS.</p></div></div>
           <div id="checkin-setup">
             <div class="chips" id="checkin-mins">
               <button class="chip" data-min="10" type="button">10 min</button>
@@ -211,6 +229,15 @@
               <button class="btn btn-secondary btn-sm" id="checkin-extend" type="button">+10 min</button>
             </div>
           </div>
+        </div>
+
+        <div class="card tool tool-wide" id="rec-card">
+          <div class="tool-head"><span class="tool-ico ico-mic" aria-hidden="true"></span><div><h3>Evidence recorder</h3><p>Record audio of what's happening. Recordings stay on this device until you download or delete them.</p></div></div>
+          <div class="rec-console">
+            <button class="rec-btn" id="rec-toggle" type="button" aria-pressed="false"><span class="rec-dot" aria-hidden="true"></span><span id="rec-label">Start recording</span></button>
+            <div class="rec-scope"><canvas id="rec-wave" aria-hidden="true"></canvas><span class="rec-time" id="rec-time">0:00</span></div>
+          </div>
+          <div id="rec-list" class="rec-list"></div>
         </div>
 
         <div class="card tool" id="tool-fakecall">
@@ -249,9 +276,66 @@
           <div id="helpline-list" class="helpline-list"></div>
         </div>
 
-        <div class="card tool tool-wide" id="tool-install" hidden>
+        <div class="card tool" id="tool-guide">
+          <div class="tool-head"><span class="tool-ico ico-guide" aria-hidden="true"></span><div><h3>Safety guide</h3><p>Travel and cab tips, what to do if you feel unsafe, online safety and your legal rights.</p></div></div>
+          <button class="btn btn-secondary btn-sm btn-block" type="button" data-go="tips">Open the guide</button>
+        </div>
+
+        <div class="card tool" id="tool-install" hidden>
           <div class="tool-head"><span class="tool-ico ico-install" aria-hidden="true"></span><div><h3>Install SafeCircle</h3><p id="install-copy">Add SafeCircle to your home screen so SOS is one tap away, even offline.</p></div></div>
           <button class="btn btn-primary btn-sm btn-block" id="install-btn" type="button">Install app</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== INSIGHTS ===================== -->
+  <section class="screen" id="screen-insights" aria-label="Insights">
+    <div class="topbar">
+      <span class="eyebrow">04 // DATA</span>
+      <h1>Insights <span class="hi">आँकड़े</span></h1>
+      <p>Public NCRB data and community reports, at a glance</p>
+    </div>
+    <div class="scroll">
+      <div class="ins-grid">
+        <div class="panel ins-globe-panel">
+          <div class="panel-head"><span class="tagbox">A</span><span class="ph-title">City signal globe</span><span class="ph-code">DRAG · TAP A SPIKE</span></div>
+          <div class="globe-wrap"><canvas id="ins-globe" tabindex="0" aria-label="Interactive globe of the mapped cities. Spike height shows each city's safety signal. The same data is in the city list below."></canvas></div>
+          <div class="legend-row"><span><i class="dot-risk"></i>High</span><span><i class="dot-moderate"></i>Moderate</span><span><i class="dot-safe"></i>Lower</span><span class="legend-note">Spike height = signal score</span></div>
+        </div>
+
+        <div class="kpis">
+          <div class="kpi"><span class="kpi-label">Rape cases registered, 2022</span><b id="kpi-cases">—</b><small id="kpi-cases-sub"></small></div>
+          <div class="kpi"><span class="kpi-label">Cities with a high signal</span><b id="kpi-high">—</b><small>NCRB baseline + recent reports</small></div>
+          <div class="kpi"><span class="kpi-label">Community reports</span><b id="kpi-reports">—</b><small id="kpi-reports-sub"></small></div>
+        </div>
+
+        <div class="panel ins-trend">
+          <div class="panel-head"><span class="tagbox">B</span><span class="ph-title">Rape cases registered in India, per year</span><button class="ph-btn" type="button" data-table-toggle aria-pressed="false">Table</button></div>
+          <div class="chart" id="chart-trend"></div>
+          <table class="data-table" id="table-trend"></table>
+          <p class="source-note">Source: NCRB, Crime in India 2014–2022. Registered FIRs, not all incidents; changes partly reflect reporting.</p>
+        </div>
+
+        <div class="panel ins-cities">
+          <div class="panel-head"><span class="tagbox">C</span><span class="ph-title">Safety signal by city (0–100)</span><button class="ph-btn" type="button" data-table-toggle aria-pressed="false">Table</button></div>
+          <div class="chart bars" id="chart-cities"></div>
+          <table class="data-table" id="table-cities"></table>
+          <p class="source-note">Tap a city to open it on the map.</p>
+        </div>
+
+        <div class="panel ins-heat">
+          <div class="panel-head"><span class="tagbox">D</span><span class="ph-title">Reports by day and time</span><button class="ph-btn" type="button" data-table-toggle aria-pressed="false">Table</button></div>
+          <div class="chart" id="chart-heat"></div>
+          <table class="data-table" id="table-heat"></table>
+          <div class="heat-legend" aria-hidden="true"><span>None</span><i class="zero"></i><span>Fewer</span><i style="--hc:#6A3A16"></i><i style="--hc:#93501A"></i><i style="--hc:#BC661E"></i><i style="--hc:#E37D25"></i><i style="--hc:#FFA04F"></i><span>More</span></div>
+          <p class="hint" id="heat-empty">No reports yet. Add one from the Reports tab to see patterns here.</p>
+        </div>
+
+        <div class="panel ins-cats">
+          <div class="panel-head"><span class="tagbox">E</span><span class="ph-title">What people reported</span></div>
+          <div class="chart bars" id="chart-cats"></div>
+          <p class="hint" id="cats-empty">Categories you pick when reporting show up here.</p>
         </div>
       </div>
     </div>
@@ -260,7 +344,9 @@
   <!-- ===================== TIPS ===================== -->
   <section class="screen" id="screen-tips" aria-label="Safety tips">
     <div class="topbar">
-      <h1>Safety tips</h1>
+      <button class="back-btn" type="button" data-go="tools">‹ Toolkit</button>
+      <span class="eyebrow">06 // GUIDE</span>
+      <h1>Safety guide <span class="hi">सुझाव</span></h1>
       <p>Quick guidance, organised for the moment you need it</p>
     </div>
     <div class="scroll" id="tips-list"></div>
@@ -269,7 +355,8 @@
   <!-- ===================== PROFILE ===================== -->
   <section class="screen" id="screen-profile" aria-label="Profile">
     <div class="topbar">
-      <h1>Profile</h1>
+      <span class="eyebrow">05 // PROFILE</span>
+      <h1>Profile <span class="hi">प्रोफ़ाइल</span></h1>
       <p>Your details, emergency contacts and settings</p>
     </div>
     <div class="scroll">
@@ -331,8 +418,15 @@
       </div>
 
       <div class="card">
+        <h3 class="card-title">Connections (APIs)</h3>
+        <p class="muted small">Optional services, switched on in <code>config.js</code>. See API.md for setup.</p>
+        <div id="api-list" class="api-list"></div>
+        <button class="btn btn-ghost btn-sm btn-block" id="api-test" type="button" hidden>Send a test alert to my webhook</button>
+      </div>
+
+      <div class="card">
         <h3 class="card-title">Your data</h3>
-        <p class="muted small">Everything is stored in this browser only. Clearing site data or logging out deletes it.</p>
+        <p class="muted small">Everything is stored in this browser only. Logging out deletes it, including recordings.</p>
         <div class="btn-pair">
           <button class="btn btn-ghost btn-sm" id="export-btn" type="button">Download my data</button>
           <button class="btn btn-ghost btn-sm" id="logout-btn" type="button">Log out &amp; erase</button>
@@ -369,23 +463,28 @@
         <button class="btn btn-sos-alt" id="btn-share-link" type="button">Share / copy link</button>
         <button class="btn btn-sos-alt" id="btn-sos-siren" type="button">Sound siren</button>
       </div>
+      <button class="btn btn-sos-alt btn-block btn-record" id="btn-sos-record" type="button">● Record audio evidence</button>
+      <p class="sos-webhook" id="sos-webhook" hidden>✓ Alert sent to your connected alert service with your live location. Still call 112 if you're in danger.</p>
 
       <div id="sos-contacts"></div>
       <div id="sos-police"></div>
       <div id="sos-medical"></div>
 
-      <p class="sos-honest">SafeCircle can't dispatch police or send texts by itself. Use the buttons above: they open your phone's dialer, SMS or WhatsApp with everything filled in.</p>
+      <p class="sos-honest">SafeCircle can't dispatch police by itself. The buttons above open your phone's dialer, SMS or WhatsApp with everything filled in.</p>
       <button class="btn btn-ghost btn-end" id="btn-end-sos" type="button">I'm safe now · end alert</button>
     </div>
   </section>
 
-  <!-- Bottom nav -->
+  <!-- Navigation -->
   <nav class="bottomnav" id="bottomnav" aria-label="Main">
-    <button class="navbtn" data-nav="map" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 20l-5.5 2V6L9 4m0 16l6 2m-6-2V4m6 18l5.5-2V4L15 6m0 14V4m0 0L9 4"/></svg>Map</button>
-    <button class="navbtn" data-nav="feed" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg>Reports</button>
-    <button class="navbtn" data-nav="tools" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 22s8-4.5 8-11V5l-8-3-8 3v6c0 6.5 8 11 8 11z"/></svg>Toolkit</button>
-    <button class="navbtn" data-nav="tips" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-5M12 8h.01"/></svg>Tips</button>
-    <button class="navbtn" data-nav="profile" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.5-7 8-7s8 3 8 7"/></svg>Profile</button>
+    <div class="nav-brand" aria-hidden="true"><svg class="logo"><use href="#logo"/></svg><div><b>SafeCircle</b><small>INDIA · SAFETY GRID</small></div></div>
+    <button class="navbtn" data-nav="map" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M9 20l-5.5 2V6L9 4m0 16l6 2m-6-2V4m6 18l5.5-2V4L15 6m0 14V4m0 0L9 4"/></svg><span>Map</span><em>01</em></button>
+    <button class="navbtn" data-nav="feed" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10"/></svg><span>Reports</span><em>02</em></button>
+    <button class="navbtn" data-nav="tools" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 22s8-4.5 8-11V5l-8-3-8 3v6c0 6.5 8 11 8 11z"/></svg><span>Toolkit</span><em>03</em></button>
+    <button class="navbtn" data-nav="insights" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.2 3 14.8 0 18M12 3c-3 3.2-3 14.8 0 18"/></svg><span>Insights</span><em>04</em></button>
+    <button class="navbtn" data-nav="profile" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.5-7 8-7s8 3 8 7"/></svg><span>Profile</span><em>05</em></button>
+    <button class="navbtn nav-wide" data-nav="tips" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 5h11a3 3 0 013 3v12H7a3 3 0 01-3-3V5z"/><path d="M18 8h2v12"/></svg><span>Guide</span><em>06</em></button>
+    <div class="nav-status" aria-hidden="true"><span class="live-dot"></span>SYSTEM ONLINE</div>
   </nav>
 
   <!-- Check-in banner (visible on every screen while a timer runs) -->
@@ -396,7 +495,7 @@
   </div>
 
   <!-- SOS floating button -->
-  <button class="sos-fab" id="sos-fab" type="button" aria-label="Send SOS alert">SOS</button>
+  <button class="sos-fab" id="sos-fab" type="button" aria-label="Send SOS alert"><span>SOS</span></button>
 
   <!-- Zone detail sheet -->
   <div class="sheet-overlay" id="zone-sheet-overlay">
@@ -425,7 +524,7 @@
   <div class="modal-overlay" id="report-modal-overlay">
     <form class="modal" role="dialog" aria-modal="true" aria-labelledby="report-title" id="report-form" novalidate>
       <h3 id="report-title">Add a report</h3>
-      <p>Reports are saved on this device and anonymous. Verified-account reports count more, and older reports slowly lose influence.</p>
+      <p>Reports are anonymous. Verified-account reports count more, and older reports slowly lose influence.</p>
       <div class="field">
         <label for="report-zone">Area</label>
         <select id="report-zone"></select>
@@ -477,7 +576,7 @@
   <!-- SOS countdown -->
   <div class="fullscreen sos-countdown" id="sos-countdown" hidden role="alertdialog" aria-modal="true" aria-labelledby="sos-count-title">
     <h2 id="sos-count-title">Starting SOS in</h2>
-    <div class="big-count" id="sos-count">3</div>
+    <div class="count-ring"><div class="big-count" id="sos-count">3</div></div>
     <p>Opens one-tap calling, SMS and WhatsApp with your live location.</p>
     <button class="btn btn-danger btn-xl" id="sos-now" type="button">Send now</button>
     <button class="btn btn-ghost btn-end" id="sos-count-cancel" type="button">Cancel</button>
@@ -516,13 +615,19 @@
     <button class="btn btn-danger btn-xl" id="checkin-alert-sos" type="button">I need help</button>
   </div>
 
+  <div class="ins-tip" id="ins-tip" hidden role="status"><b></b><span></span></div>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
 </div>
 
 <script src="vendor/leaflet/leaflet.js"></script>
 <script src="config.js"></script>
+<script src="globe-data.js"></script>
+<script src="globe.js"></script>
+<script src="api.js"></script>
 <script src="app.js"></script>
 <script src="tools.js"></script>
+<script src="recorder.js"></script>
+<script src="insights.js"></script>
 <script src="verify.js"></script>
 <script src="stats.js"></script>
 </body>

@@ -1,0 +1,15 @@
+# Cloudflare Worker config for the SafeCircle alert server (see API.md section 3)
+name = "safecircle-alerts"
+main = "cloudflare-worker.js"
+compatibility_date = "2026-09-01"
+
+# Stores running check-ins so the server can alert if one is missed.
+# Create it with:  npx wrangler kv namespace create CHECKINS
+# then paste the id it prints below.
+[[kv_namespaces]]
+binding = "CHECKINS"
+id = "PASTE_YOUR_KV_NAMESPACE_ID_HERE"
+
+# Checks for missed check-ins every minute.
+[triggers]
+crons = ["* * * * *"]

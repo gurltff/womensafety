@@ -1,0 +1,123 @@
+{
+  "updated": "2026-10-04",
+  "source": "NCRB Crime in India 2022/2023 (built-in SafeCircle data)",
+  "zones": [
+    {
+      "id": "delhi",
+      "name": "Delhi (NCT)",
+      "level": "red",
+      "lat": 28.6139,
+      "lng": 77.209,
+      "reason": "Highest among 19 metros: 1,204 rape cases in 2022 and 1,088 in 2023 (NCRB). Police attribute part of this to strict FIR registration.",
+      "source": "NCRB Crime in India (2022/2023). Registered FIRs, not all incidents."
+    },
+    {
+      "id": "jaipur",
+      "name": "Jaipur",
+      "level": "red",
+      "lat": 26.9124,
+      "lng": 75.7873,
+      "reason": "Second-highest among metros: 497 rape cases in 2022 and 573 in 2023 (NCRB). Rajasthan is also among the top states by absolute count.",
+      "source": "NCRB Crime in India (2022/2023). Registered FIRs, not all incidents."
+    },
+    {
+      "id": "indore",
+      "name": "Indore",
+      "level": "red",
+      "lat": 22.7196,
+      "lng": 75.8577,
+      "reason": "NCRB 2023 reported a crime-against-women rate per lakh higher than Delhi's. Madhya Pradesh is among the top states by rape cases.",
+      "source": "NCRB Crime in India (2022/2023). Registered FIRs, not all incidents."
+    },
+    {
+      "id": "lucknow",
+      "name": "Lucknow",
+      "level": "yellow",
+      "lat": 26.8467,
+      "lng": 80.9462,
+      "reason": "One of the 19 NCRB metros; Uttar Pradesh records among the highest absolute counts of crimes against women. Check NCRB city tables for exact figures.",
+      "source": "NCRB Crime in India (2022/2023). Registered FIRs, not all incidents."
+    },
+    {
+      "id": "kanpur",
+      "name": "Kanpur",
+      "level": "yellow",
+      "lat": 26.4499,
+      "lng": 80.3319,
+      "reason": "Higher-than-average dowry/crime-against-women rates among metros in NCRB 2023. Check NCRB city tables for exact figures.",
+      "source": "NCRB Crime in India (2022/2023). Registered FIRs, not all incidents."
+    },
+    {
+      "id": "ghaziabad",
+      "name": "Ghaziabad",
+      "level": "yellow",
+      "lat": 28.6692,
+      "lng": 77.4538,
+      "reason": "NCRB metro with elevated crime-against-women rates in 2023. Part of the Delhi-NCR belt; check NCRB tables for exact figures.",
+      "source": "NCRB Crime in India (2022/2023). Registered FIRs, not all incidents."
+    },
+    {
+      "id": "mumbai",
+      "name": "Mumbai",
+      "level": "yellow",
+      "lat": 19.076,
+      "lng": 72.8777,
+      "reason": "6,176 crimes against women in 2022, second among metros in volume (NCRB), but 196 rape cases in 2023, far fewer than Delhi or Jaipur.",
+      "source": "NCRB Crime in India (2022/2023). Registered FIRs, not all incidents."
+    },
+    {
+      "id": "bengaluru",
+      "name": "Bengaluru",
+      "level": "yellow",
+      "lat": 12.9716,
+      "lng": 77.5946,
+      "reason": "3,924 crimes against women in 2022, third among metros (NCRB). Large share is cyber and harassment-type cases.",
+      "source": "NCRB Crime in India (2022/2023). Registered FIRs, not all incidents."
+    },
+    {
+      "id": "hyderabad",
+      "name": "Hyderabad",
+      "level": "yellow",
+      "lat": 17.385,
+      "lng": 78.4867,
+      "reason": "Large metro with high cyber-crime-against-women volume (NCRB 2022). Check NCRB tables for rape and harassment counts.",
+      "source": "NCRB Crime in India (2022/2023). Registered FIRs, not all incidents."
+    },
+    {
+      "id": "patna",
+      "name": "Patna",
+      "level": "yellow",
+      "lat": 25.5941,
+      "lng": 85.1376,
+      "reason": "NCRB metro; Bihar reports elevated crimes against women. Check NCRB tables for exact figures.",
+      "source": "NCRB Crime in India (2022/2023). Registered FIRs, not all incidents."
+    },
+    {
+      "id": "pune",
+      "name": "Pune",
+      "level": "yellow",
+      "lat": 18.5204,
+      "lng": 73.8567,
+      "reason": "NCRB metro with moderate volume of crimes against women. Check NCRB tables for exact figures.",
+      "source": "NCRB Crime in India (2022/2023). Registered FIRs, not all incidents."
+    },
+    {
+      "id": "kolkata",
+      "name": "Kolkata",
+      "level": "green",
+      "lat": 22.5726,
+      "lng": 88.3639,
+      "reason": "Has had one of the lowest registered rates of crime against women among NCRB metros. Low reported rate is not zero risk.",
+      "source": "NCRB Crime in India (2022/2023). Registered FIRs, not all incidents."
+    },
+    {
+      "id": "chennai",
+      "name": "Chennai",
+      "level": "green",
+      "lat": 13.0827,
+      "lng": 80.2707,
+      "reason": "Moderate reported rates relative to size among NCRB metros. Check NCRB tables for exact figures.",
+      "source": "NCRB Crime in India (2022/2023). Registered FIRs, not all incidents."
+    }
+  ]
+}
