@@ -58,7 +58,7 @@ async function selectSite(site, fly) {
   $('siteCoords').textContent = fmtLatLon(site);
   syncForm();
   updateSky();
-  if (fly) globe.flyTo(site.lat, site.lon);
+  if (fly) globe.flyTo(site);
 }
 
 function updateSky() {
@@ -154,8 +154,8 @@ function syncForm() {
   $('fDays').value = state.days;
   $('fBatt').value = state.battery;
   $('horizonNote').innerHTML = state.horizon
-    ? '<b>Terrain horizon loaded</b> from LOLA elevation data for this site.'
-    : '<b>Flat horizon.</b> No terrain file for this site yet, so nearby mountains are not counted. Build one with <code>tools/build_horizon.py</code>.';
+    ? '<b>Real terrain horizon</b> for this site, built from NASA LOLA elevation data.'
+    : '<b>Flat horizon.</b> Custom spots have no terrain skyline yet, so nearby mountains are not counted. Build one with <code>tools/build_horizon.py</code>.';
 }
 fSite.addEventListener('change', () => {
   const s = SITES.find((x) => x.id === fSite.value);
@@ -241,7 +241,7 @@ function renderReport(r) {
     <h3>Warnings</h3>
     <ul class="warn-list">${r.warnings.map((w) => `<li class="warn"><span class="pill ${w.level}">${w.level === 'ok' ? 'All clear' : w.level}</span><span>${w.text}</span></li>`).join('')}</ul>
     <div class="suggest" id="suggest">Checking other landing dates…</div>
-    ${r.horizonFlat ? '<p class="hint"><b>Flat horizon.</b> Results ignore nearby mountains until a LOLA terrain file is added for this site, so real shadows will be longer.</p>' : ''}
+    ${r.horizonFlat ? '<p class="hint"><b>Flat horizon.</b> This custom spot has no terrain skyline, so nearby mountains are ignored and real shadows will be longer.</p>' : ''}
     <div class="report-actions">
       <button class="cta" type="button" id="toStand">Stand on the Moon</button>
       <button class="ghost" type="button" id="toCompare">Add to compare</button>
@@ -312,8 +312,8 @@ function openStand(idx) {
   open('stand');
   $('standSite').textContent = `${r.siteName} · ${fmtLatLon(r.site)} · vertical scale ×${pano.vScale}`;
   $('standNote').textContent = r.horizonFlat
-    ? 'Flat horizon shown. Add a LOLA terrain file for this site to see the real mountain skyline.'
-    : 'Skyline from LOLA elevation data.';
+    ? 'Flat horizon shown. Custom spots have no terrain skyline yet.'
+    : 'Skyline from NASA LOLA elevation data (LDEM 20 m and 80 m), out to 150 km.';
   const slider = $('standSlider');
   slider.max = r.tl.length - 1;
   pano.set({ horizon: state.horizon, track: r.tl.filter((_, i) => i % 2 === 0).map((p) => ({ sunAz: p.sunAz, sunEl: p.sunEl, earthAz: p.earthAz, earthEl: p.earthEl })) });
@@ -393,8 +393,14 @@ document.querySelectorAll('.tool').forEach((b) => b.addEventListener('click', ()
   if (t === 'pins') { const on = toggle(); $('labels').hidden = !on; globe.pins.forEach((p) => { p.mesh.visible = on; }); }
   if (t === 'grid') globe.grid.visible = toggle();
   if (t === 'sun') { const on = toggle(); globe.setFullLight(!on); if (!on) toast('Showing the whole Moon evenly lit. Turn Sunlight back on to see real lighting for the chosen time.'); }
-  if (t === 'pole') globe.polarRing.visible = toggle();
-  if (t === 'pole-view') globe.flyTo(state.site.lat, state.site.lon);
+  if (t === 'relief') {
+    const on = toggle();
+    globe.setRelief(on ? 5 : 1);
+    $('reliefLabel').textContent = on ? 'Relief ×5' : 'Relief ×1';
+    toast(on ? 'Terrain heights exaggerated 5×.' : 'Terrain at true scale.');
+  }
+  if (t === 'fly') globe.flyTo(state.site);
+  if (t === 'home') globe.flyHome();
   if (t === 'stand') openStand(0);
   if (t === 'compare') openCompare();
 }));

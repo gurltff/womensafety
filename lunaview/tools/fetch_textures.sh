@@ -1,20 +1,30 @@
 #!/usr/bin/env bash
-# Download NASA's CGI Moon Kit (LROC colour + LOLA elevation) and convert it for the globe.
-# Source: https://svs.gsfc.nasa.gov/4720  (public domain, NASA Scientific Visualization Studio)
-# Needs: curl and ImageMagick (`magick` or `convert`). Run from the lunaview/ folder.
+# Download NASA data and rebuild everything the app uses from it. Run from the lunaview/ folder.
+#   - CGI Moon Kit (LROC colour + LOLA ldem_16), https://svs.gsfc.nasa.gov/4720
+#   - LOLA south polar DEMs LDEM_80S_80M and LDEM_875S_20M (PDS Geosciences Node)
+# Needs: curl, python3 with numpy, pillow, tifffile, imagecodecs  (pip install numpy pillow tifffile imagecodecs)
+# The results are committed, so the team only needs this to change resolution or add sites.
 set -euo pipefail
 
 KIT=https://svs.gsfc.nasa.gov/vis/a000000/a004700/a004720
-OUT=public/textures
-SIZE=${SIZE:-8k}   # 2k, 4k, 8k or 16k. 8k is a good balance for laptops and phones.
-mkdir -p "$OUT" .cache
+PDS=https://pds-geosciences.wustl.edu/lro/lro-l-lola-3-rdr-v1/lrolol_1xxx/data/lola_gdr/polar/img
+mkdir -p .cache
 
-curl -fL -o .cache/lroc_color.tif "$KIT/lroc_color_poles_${SIZE}.tif"
-curl -fL -o .cache/ldem.tif "$KIT/ldem_16_uint.tif"
+get() { [ -s ".cache/$2" ] || curl -fL -o ".cache/$2" "$1"; }
+get "$KIT/lroc_color_poles_8k.tif" lroc_color_poles_8k.tif
+get "$KIT/ldem_16.tif" ldem_16.tif
+for f in ldem_80s_80m ldem_875s_20m; do
+  get "$PDS/$f.lbl" "$f.lbl"
+  get "$PDS/$f.img" "$f.img"
+done
 
-IM=$(command -v magick || command -v convert)
-"$IM" .cache/lroc_color.tif -quality 88 "$OUT/lroc_color.jpg"
-# Elevation as an 8-bit bump map, stretched to full contrast.
-"$IM" .cache/ldem.tif -auto-level -depth 8 -resize 8192x4096 -quality 92 "$OUT/ldem.jpg"
+python3 tools/build_textures.py
 
-echo "Wrote $OUT/lroc_color.jpg and $OUT/ldem.jpg. Restart 'npm run dev' to see them."
+# Terrain skylines. Start points are published coordinates; --snap-km moves each to the local high point.
+hz() { python3 tools/build_horizon.py --dem .cache/ldem_875s_20m.lbl --dem .cache/ldem_80s_80m.lbl --snap-km 1 --site "$1" --lat "$2" --lon "$3"; }
+hz shackleton-rim   -89.68 -166.0
+hz connecting-ridge -89.44 -141.8
+hz de-gerlache-rim  -88.71  -68.7
+hz malapert-massif  -86.0     2.9
+hz mons-mouton      -84.4    30.0
+echo "Done. Copy the snapped lat/lon printed above into src/sites.js if they changed."

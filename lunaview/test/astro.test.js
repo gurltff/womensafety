@@ -30,3 +30,14 @@ test('A 3 deg ridge all round puts a polar site in permanent shadow and fails th
   assert.ok(r.fatal.length > 0);
   assert.ok(r.score <= 45);
 });
+
+test('Shackleton rim with real LOLA terrain is sunlit ~86% of the time (Bussey et al. 2010, point A)', async () => {
+  const fs = await import('node:fs');
+  const h = JSON.parse(fs.readFileSync(new URL('../src/horizons/shackleton-rim.json', import.meta.url)));
+  let lit = 0, n = 0;
+  for (let t = Date.UTC(2026, 0, 1); t < Date.UTC(2028, 0, 1); t += 6 * 3600e3, n++) {
+    if (skyAt({ lat: h.lat, lon: h.lon }, new Date(t), h.horizon).sunlit) lit++;
+  }
+  const pct = (100 * lit) / n;
+  assert.ok(pct > 80 && pct < 92, `${pct.toFixed(1)}%`);
+});

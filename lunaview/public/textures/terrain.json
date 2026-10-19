@@ -1,0 +1,18 @@
+{
+ "radius_m": 1737400.0,
+ "height_png": {
+  "min_m": -8981.500625610352,
+  "max_m": 10685.500144958496
+ },
+ "polar": {
+  "half_m": 166906.6128971294,
+  "grid": 1025,
+  "limit_lat": -84.5,
+  "min_m": -5493.151823757044,
+  "max_m": 7025.0
+ },
+ "sources": [
+  "NASA SVS CGI Moon Kit (LROC colour, LOLA ldem_16)",
+  "LOLA LDEM_80S_80M"
+ ]
+}

@@ -1,35 +1,24 @@
-// Candidate south-pole landing sites. Coordinates are approximate and taken from published
-// illumination studies and NASA's Artemis III candidate-region list; check them against the
+// Candidate south-pole landing sites. Each starts from a published point (illumination studies or
+// NASA's Artemis III region list) and is moved to the highest LOLA ground within 1 km, the way a
+// lander would aim for a ridge crest (tools/build_horizon.py --snap-km 1). Check them against the
 // official challenge resources before the demo.
 export const SITES = [
-  { id: 'shackleton-rim', name: 'Shackleton rim', lat: -89.68, lon: -166.0, note: 'Bussey et al. 2010, point A' },
-  { id: 'connecting-ridge', name: 'Connecting Ridge', lat: -89.45, lon: -137.3, note: 'Ridge between Shackleton and de Gerlache' },
-  { id: 'de-gerlache-rim', name: 'de Gerlache rim', lat: -88.71, lon: -68.7, note: 'Artemis III candidate region' },
-  { id: 'haworth', name: 'Haworth', lat: -86.9, lon: -2.0, note: 'Artemis III candidate region' },
-  { id: 'malapert-massif', name: 'Malapert Massif', lat: -86.0, lon: 2.9, note: 'Artemis III candidate region' },
-  { id: 'mons-mouton', name: 'Mons Mouton', lat: -84.4, lon: 30.0, note: 'Artemis III candidate region' },
+  { id: 'shackleton-rim', name: 'Shackleton rim', lat: -89.687, lon: -162.635, note: 'Bussey et al. 2010, point A' },
+  { id: 'connecting-ridge', name: 'Connecting Ridge', lat: -89.443, lon: -138.454, note: 'Bussey et al. 2010, point B' },
+  { id: 'de-gerlache-rim', name: 'de Gerlache rim', lat: -88.678, lon: -68.382, note: 'Bussey et al. 2010, point C; Artemis III region' },
+  { id: 'malapert-massif', name: 'Malapert Massif', lat: -85.991, lon: 2.771, note: 'Artemis III candidate region' },
+  { id: 'mons-mouton', name: 'Mons Mouton', lat: -84.384, lon: 30.290, note: 'Artemis III candidate region' },
 ];
 
-const horizonCache = new Map();
+// Terrain horizons built from LOLA polar DEMs by tools/build_horizon.py, bundled with the app.
+const files = import.meta.glob('./horizons/*.json', { eager: true, import: 'default' });
+const HORIZONS = Object.fromEntries(Object.values(files).map((h) => [h.site, h]));
+for (const s of SITES) s.heightM = HORIZONS[s.id]?.site_height_m ?? 0;
 
-// Terrain horizon from public/horizons/<id>.json (built by tools/build_horizon.py).
-// Returns null when no file exists, which means a flat horizon.
-export async function loadHorizon(site) {
-  // The single-file build has no horizon files next to it.
-  if (!site.id || import.meta.env?.MODE === 'single') return null;
-  if (horizonCache.has(site.id)) return horizonCache.get(site.id);
-  let horizon = null;
-  try {
-    const res = await fetch(`horizons/${site.id}.json`);
-    if (res.ok) {
-      const data = await res.json();
-      if (Array.isArray(data.horizon) && data.horizon.length >= 36) horizon = data.horizon;
-    }
-  } catch {
-    // No horizon file served here; fall back to a flat horizon.
-  }
-  horizonCache.set(site.id, horizon);
-  return horizon;
+// 360 skyline elevations (deg) for a known site, or null for a custom spot (flat horizon).
+export function loadHorizon(site) {
+  const h = site.id && HORIZONS[site.id];
+  return Promise.resolve(h && Array.isArray(h.horizon) ? h.horizon : null);
 }
 
 export function parseCoords(text) {
