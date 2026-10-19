@@ -9,7 +9,7 @@ Outputs in public/textures/:
   lroc_color.jpg (8k) and lroc_color_4k.jpg   globe colour
   ldem_normal.jpg                             tangent-space normal map from real heights
   ldem_height.png + terrain.json              8-bit height map for vertex displacement (+ its range)
-  polar_height.bin                            high-detail south-pole patch (int16 metres, row-major)
+  polar_height.png                            high-detail south-pole heights (R*256+G-32768 metres)
 Run: python tools/build_textures.py
 """
 import json
@@ -72,7 +72,10 @@ def polar_patch():
     samples = lab["sample_off"] + X / lab["scale_m"]
     hgt = sample_bilinear(dem, lines, samples)
     hgt = np.nan_to_num(hgt, nan=0.0)
-    np.clip(hgt, -32768, 32767).astype("<i2").tofile(OUT / "polar_height.bin")
+    # Lossless: metres + 32768 split into a high byte (red) and low byte (green) of an 8-bit PNG.
+    u = (np.clip(np.round(hgt), -32768, 32767) + 32768).astype(np.uint16)
+    rgb16 = np.dstack([u >> 8, u & 255, np.zeros_like(u)]).astype(np.uint8)
+    Image.fromarray(rgb16).save(OUT / "polar_height.png", optimize=True)
 
     return {"half_m": half, "grid": POLAR_GRID, "limit_lat": POLAR_LIMIT,
             "min_m": float(hgt.min()), "max_m": float(hgt.max())}

@@ -150,8 +150,20 @@ export class Globe {
   }
 
   async buildPolarPatch(meta) {
-    const buf = await fetch(TEX + 'polar_height.bin').then((r) => r.arrayBuffer());
-    const heights = new Int16Array(buf);
+    // Heights are packed losslessly in a PNG: metres = red * 256 + green - 32768.
+    const img = await new Promise((ok, fail) => {
+      const im = new Image();
+      im.onload = () => ok(im);
+      im.onerror = fail;
+      im.src = TEX + 'polar_height.png';
+    });
+    const cv = document.createElement('canvas');
+    cv.width = img.width; cv.height = img.height;
+    const ctx = cv.getContext('2d', { willReadFrequently: true, colorSpace: 'srgb' });
+    ctx.drawImage(img, 0, 0);
+    const px = ctx.getImageData(0, 0, img.width, img.height).data;
+    const heights = new Int16Array(img.width * img.height);
+    for (let i = 0; i < heights.length; i++) heights[i] = px[i * 4] * 256 + px[i * 4 + 1] - 32768;
     const G = meta.grid, step = 2, n = Math.floor((G - 1) / step) + 1;
     const half = meta.half_m;
     const pos = new Float32Array(n * n * 3);
