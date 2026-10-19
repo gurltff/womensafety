@@ -28,7 +28,7 @@ export class Globe {
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.maxTex = this.renderer.capabilities.maxTextureSize;
     this.scene = new THREE.Scene();
-    this.camera = new THREE.PerspectiveCamera(35, 1, 0.0002, 200);
+    this.camera = new THREE.PerspectiveCamera(35, 1, 0.00002, 200);
     this.camera.position.copy(llToWorld(-40, 8, 5.2));
 
     this.controls = new OrbitControls(this.camera, canvas);
@@ -143,19 +143,19 @@ export class Globe {
       }
       this.material.bumpMap = null;
       this.material.needsUpdate = true;
-      await this.buildPolarPatch(meta.polar);
+      await this.buildPolarPatch(meta.polar, load);
       this.setRelief(this.relief);
       this.onTextures?.();
     }).catch(() => {});
   }
 
-  async buildPolarPatch(meta) {
-    // Heights are packed losslessly in a PNG: metres = red * 256 + green - 32768.
+  // Heights are packed losslessly in a PNG: metres = red * 256 + green - 32768.
+  async loadHeights(url) {
     const img = await new Promise((ok, fail) => {
       const im = new Image();
       im.onload = () => ok(im);
       im.onerror = fail;
-      im.src = TEX + 'polar_height.png';
+      im.src = url;
     });
     const cv = document.createElement('canvas');
     cv.width = img.width; cv.height = img.height;
@@ -164,43 +164,157 @@ export class Globe {
     const px = ctx.getImageData(0, 0, img.width, img.height).data;
     const heights = new Int16Array(img.width * img.height);
     for (let i = 0; i < heights.length; i++) heights[i] = px[i * 4] * 256 + px[i * 4 + 1] - 32768;
-    const G = meta.grid, step = 2, n = Math.floor((G - 1) / step) + 1;
-    const half = meta.half_m;
-    const pos = new Float32Array(n * n * 3);
-    this.patchData = { n, half, base: new Float32Array(n * n * 3), h: new Float32Array(n * n) };
-    for (let i = 0; i < n; i++) {
-      for (let j = 0; j < n; j++) {
-        const k = i * n + j;
-        const x = -half + (2 * half * j) / (n - 1);
-        const y = half - (2 * half * i) / (n - 1);
-        const rho = Math.hypot(x, y);
-        const lat = (2 * Math.atan(rho / (2 * R_M))) / DEG - 90;
-        const lon = Math.atan2(x, y) / DEG;
-        const d = llToWorld(lat, lon, 1);
-        this.patchData.base.set([d.x, d.y, d.z], k * 3);
-        this.patchData.h[k] = heights[i * step * G + j * step];
-      }
-    }
-    // Keep only the round cap inside the patch's latitude limit so it meets the sphere cleanly.
+    return { heights, size: img.width };
+  }
+
+  // A terrain mesh on a polar stereographic grid. x, y are metres from the pole (y toward lon 0).
+  // Vertex normals point straight up; slopes come from the normal map so detail survives at any zoom.
+  terrainMesh({ x0, x1, y0, y1, n, heightAt, keep, skirtM = 0, material }) {
+    const ring = skirtM > 0 ? 4 * (n - 1) : 0;
+    const count = n * n + ring;
+    const base = new Float32Array(count * 3);
+    const h = new Float32Array(count);
+    const uv = new Float32Array(count * 2);
+    const pxy = new Float32Array(count * 2);
+    const put = (k, x, y, hm, u, v) => {
+      const lat = (2 * Math.atan(Math.hypot(x, y) / (2 * R_M))) / DEG - 90;
+      const d = llToWorld(lat, Math.atan2(x, y) / DEG, 1);
+      base.set([d.x, d.y, d.z], k * 3);
+      h[k] = hm;
+      uv.set([u, v], k * 2);
+      pxy.set([x, y], k * 2);
+    };
+    const X = (j) => x0 + ((x1 - x0) * j) / (n - 1);
+    const Y = (i) => y0 + ((y1 - y0) * i) / (n - 1);
+    for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) put(i * n + j, X(j), Y(i), heightAt(i, j), j / (n - 1), 1 - i / (n - 1));
     const idx = [];
-    const inside = (i, j) => Math.hypot(-half + (2 * half * j) / (n - 1), half - (2 * half * i) / (n - 1)) <= half;
     for (let i = 0; i < n - 1; i++) {
       for (let j = 0; j < n - 1; j++) {
-        if (!(inside(i, j) && inside(i + 1, j) && inside(i, j + 1) && inside(i + 1, j + 1))) continue;
+        if (keep && !(keep(i, j) && keep(i + 1, j) && keep(i, j + 1) && keep(i + 1, j + 1))) continue;
         const a = i * n + j, b = a + 1, c = a + n, e = c + 1;
         idx.push(a, c, b, b, c, e);
       }
     }
+    if (ring) {
+      // A skirt hanging below the tile edge hides cracks where it meets coarser terrain.
+      const edge = [];
+      for (let j = 0; j < n - 1; j++) edge.push([0, j]);
+      for (let i = 0; i < n - 1; i++) edge.push([i, n - 1]);
+      for (let j = n - 1; j > 0; j--) edge.push([n - 1, j]);
+      for (let i = n - 1; i > 0; i--) edge.push([i, 0]);
+      edge.forEach(([i, j], e) => put(n * n + e, X(j), Y(i), heightAt(i, j) - skirtM, j / (n - 1), 1 - i / (n - 1)));
+      for (let e = 0; e < ring; e++) {
+        const [i, j] = edge[e], [i2, j2] = edge[(e + 1) % ring];
+        const a = i * n + j, b = i2 * n + j2, a2 = n * n + e, b2 = n * n + ((e + 1) % ring);
+        idx.push(a, b, b2, a, b2, a2);
+      }
+    }
     const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(count * 3), 3));
+    g.setAttribute('normal', new THREE.BufferAttribute(base.slice(), 3));
+    g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+    g.setAttribute('pxy', new THREE.BufferAttribute(pxy, 2));
     g.setIndex(idx);
+    const mesh = new THREE.Mesh(g, material);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    mesh.userData.terrain = { base, h };
+    this.placeTerrain(mesh);
+    this.scene.add(mesh);
+    return mesh;
+  }
+
+  placeTerrain(mesh) {
+    const { base, h } = mesh.userData.terrain;
+    const p = mesh.geometry.attributes.position;
+    for (let i = 0; i < h.length; i++) {
+      const r = 1 + (h[i] / R_M) * this.relief;
+      p.setXYZ(i, base[i * 3] * r, base[i * 3 + 1] * r, base[i * 3 + 2] * r);
+    }
+    p.needsUpdate = true;
+    mesh.geometry.computeBoundingSphere();
+  }
+
+  regolith(normalMap) {
     // Plain regolith grey: photo mosaics of the pole have shadows baked in, which would fight
     // with the real-time shadows cast here by the Sun at the chosen time.
-    this.patch = new THREE.Mesh(g, new THREE.MeshStandardMaterial({ color: 0x8f8b84, roughness: 1, metalness: 0 }));
-    this.patch.castShadow = true;
-    this.patch.receiveShadow = true;
-    this.scene.add(this.patch);
+    normalMap.colorSpace = THREE.NoColorSpace;
+    normalMap.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
+    return new THREE.MeshStandardMaterial({
+      color: 0x8f8b84, roughness: 1, metalness: 0, normalMap, normalScale: new THREE.Vector2(this.relief, this.relief),
+    });
+  }
+
+  async buildPolarPatch(meta, load) {
+    const [{ heights, size: G }, normal] = await Promise.all([
+      this.loadHeights(TEX + 'polar_height.png'),
+      load('polar_normal.jpg'),
+    ]);
+    const half = meta.half_m, step = 2, n = Math.floor((G - 1) / step) + 1;
+    const material = this.regolith(normal);
+    // Where a 20 m detail tile is showing, the coarse patch steps aside (bit r*4+c of tileMask).
+    const det = meta.detail;
+    this.tileMask = { value: 0 };
+    material.onBeforeCompile = (shader) => {
+      shader.uniforms.tileMask = this.tileMask;
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>', '#include <common>\nattribute vec2 pxy;\nvarying vec2 vPxy;')
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvPxy = pxy;');
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', `#include <common>\nvarying vec2 vPxy;\nuniform int tileMask;`)
+        .replace('void main() {', `void main() {
+  if (tileMask != 0 && abs(vPxy.x) < ${det.half_m.toFixed(1)} && abs(vPxy.y) < ${det.half_m.toFixed(1)}) {
+    float sz = ${((2 * det.half_m) / det.tiles).toFixed(3)};
+    int c = int((vPxy.x + ${det.half_m.toFixed(1)}) / sz);
+    int r = int((${det.half_m.toFixed(1)} - vPxy.y) / sz);
+    if (((tileMask >> (r * ${det.tiles} + c)) & 1) == 1) discard;
+  }`);
+    };
+    this.patch = this.terrainMesh({
+      x0: -half, x1: half, y0: half, y1: -half, n,
+      heightAt: (i, j) => heights[i * step * G + j * step],
+      // Keep only the round cap inside the patch's latitude limit so it meets the sphere cleanly.
+      keep: (i, j) => Math.hypot(-half + (2 * half * j) / (n - 1), half - (2 * half * i) / (n - 1)) <= half,
+      material,
+    });
     this.cutY.value = Math.sin((meta.limit_lat - 0.15) * DEG);
+    this.detail = { ...det, load, size: (2 * det.half_m) / det.tiles, tiles: new Map() };
+  }
+
+  // Load 20 m detail tiles near the camera and show them in place of the coarse patch.
+  updateDetail() {
+    const d = this.detail;
+    if (!d) return;
+    const cam = this.camera.position;
+    let mask = 0;
+    const N = this.terrain.polar.detail.tiles;
+    for (let r = 0; r < N; r++) {
+      for (let c = 0; c < N; c++) {
+        const key = `${r}_${c}`;
+        const cx = -d.half_m + (c + 0.5) * d.size, cy = d.half_m - (r + 0.5) * d.size;
+        const lat = (2 * Math.atan(Math.hypot(cx, cy) / (2 * R_M))) / DEG - 90;
+        const centre = llToWorld(lat, Math.atan2(cx, cy) / DEG, 1);
+        const near = cam.distanceTo(centre) < 0.045; // ~80 km
+        let t = d.tiles.get(key);
+        if (near && !t) {
+          t = { mesh: null };
+          d.tiles.set(key, t);
+          Promise.all([this.loadHeights(`${TEX}tiles/t${key}_h.png`), d.load(`tiles/t${key}_n.jpg`)]).then(([{ heights, size: G }, normal]) => {
+            const x0 = -d.half_m + c * d.size, y0 = d.half_m - r * d.size;
+            t.mesh = this.terrainMesh({
+              x0, x1: x0 + d.size, y0, y1: y0 - d.size, n: G,
+              heightAt: (i, j) => heights[i * G + j], skirtM: 400, material: this.regolith(normal),
+            });
+            t.mesh.material.side = THREE.DoubleSide;
+          }).catch(() => d.tiles.delete(key));
+        }
+        if (t?.mesh) {
+          t.mesh.visible = near || cam.distanceTo(centre) < 0.055;
+          if (t.mesh.visible) mask |= 1 << (r * N + c);
+        }
+      }
+    }
+    this.tileMask.value = mask;
   }
 
   // Vertical exaggeration of the terrain. 1 = true scale.
@@ -213,16 +327,11 @@ export class Globe {
       this.material.displacementBias = (lo / R_M) * k;
       this.material.normalScale.set(k, k);
     }
-    if (this.patch) {
-      const { base, h } = this.patchData;
-      const p = this.patch.geometry.attributes.position;
-      for (let i = 0; i < h.length; i++) {
-        const r = 1 + (h[i] / R_M) * k;
-        p.setXYZ(i, base[i * 3] * r, base[i * 3 + 1] * r, base[i * 3 + 2] * r);
-      }
-      p.needsUpdate = true;
-      this.patch.geometry.computeVertexNormals();
-      this.patch.geometry.computeBoundingSphere();
+    const meshes = [this.patch, ...(this.detail ? [...this.detail.tiles.values()].map((x) => x.mesh) : [])];
+    for (const m of meshes) {
+      if (!m) continue;
+      this.placeTerrain(m);
+      m.material.normalScale.set(k, k);
     }
     for (const pin of this.pins) pin.mesh.position.copy(this.sitePoint(pin.site, 0.0004));
   }
@@ -315,18 +424,35 @@ export class Globe {
   }
 
   applyLight() {
-    // The light sits just beyond the polar patch so its shadow camera covers the pole.
+    // The light sits just beyond the area it shadows, so its shadow camera covers what is on screen.
     const dir = this.fullLight ? this.camera.position.clone().normalize() : this.sunDir;
     if (!dir) return;
-    this.sun.position.copy(this.sunTarget.position).addScaledVector(dir, 0.6);
+    const size = this.shadowSize ?? 0.1;
+    this.sun.position.copy(this.sunTarget.position).addScaledVector(dir, size * 3 + 0.01);
     this.earthshine.intensity = this.fullLight ? 0.6 : 0.14;
+  }
+
+  // Shrink the shadow map to the area being looked at, so shadows sharpen as you zoom in.
+  fitShadow() {
+    const t = this.controls.target;
+    const centre = t.lengthSq() > 0.25 ? t : this.poleCentre ?? (this.poleCentre = llToWorld(-90, 0, 1));
+    const size = THREE.MathUtils.clamp(this.camera.position.distanceTo(centre) * 0.9, 0.003, 0.1);
+    if (size === this.shadowSize && this.sunTarget.position.equals(centre)) return;
+    this.shadowSize = size;
+    this.sunTarget.position.copy(centre);
+    const sc = this.sun.shadow.camera;
+    sc.left = sc.bottom = -size; sc.right = sc.top = size;
+    sc.near = 0; sc.far = size * 6 + 0.02;
+    sc.updateProjectionMatrix();
+    this.sun.shadow.normalBias = size * 0.004;
+    this.applyLight();
   }
 
   // Close-up: orbit around the site, looking at it from 2 degrees equatorward and ~50 km up.
   flyTo(site) {
     const target = this.sitePoint(site);
     const cam = llToWorld(site.lat + 2.2, site.lon, 1.03 + ((site.heightM ?? 0) / R_M) * this.relief);
-    this.startFlight(cam, target, 0.002);
+    this.startFlight(cam, target, 0.0005);
   }
 
   flyHome() {
@@ -364,6 +490,8 @@ export class Globe {
       if (t >= 1) { this.flight = null; this.controls.minDistance = f.minDistance; }
     }
     this.controls.update();
+    if ((this.frameNo = (this.frameNo ?? 0) + 1) % 8 === 0) this.updateDetail();
+    this.fitShadow();
     if (this.fullLight) this.applyLight();
     this.camera.updateMatrixWorld();
     this.updatePins();

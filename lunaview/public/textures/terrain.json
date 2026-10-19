@@ -9,7 +9,13 @@
   "grid": 1025,
   "limit_lat": -84.5,
   "min_m": -5493.151823757044,
-  "max_m": 7025.0
+  "max_m": 7025.0,
+  "detail": {
+   "half_m": 74000.0,
+   "tiles": 4,
+   "grid": 257,
+   "source": "LOLA LDEM_875S_20M"
+  }
  },
  "sources": [
   "NASA SVS CGI Moon Kit (LROC colour, LOLA ldem_16)",

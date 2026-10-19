@@ -43,9 +43,10 @@ The time chip (bottom right) moves the lighting on the globe to any date. **Play
 
 | Part | Source | Detail |
 |---|---|---|
-| Size and shape | LOLA heights, 1737.4 km radius | Global ~1.9 km per sample; pole patch ~330 m per vertex |
+| Size and shape | LOLA heights, 1737.4 km radius | Global ~1.9 km per sample; pole patch ~650 m per vertex; detail tiles ~145 m |
 | Surface colour | LROC WAC mosaic (8k) | ~1.3 km per pixel |
-| Pole shadows | LOLA 80 m DEM, real Sun position | Shadow map ~80 m per texel |
+| Pole shading | LOLA 80 m DEM; LOLA 20 m DEM in 16 tiles within ~74 km of the pole, loaded as you zoom in | 80 m, then 18 m per pixel |
+| Pole shadows | Real Sun position; shadow area shrinks to what is on screen | ~50 m per texel zoomed out, a few metres up close |
 | Skylines for sites | LOLA 20 m + 80 m DEMs | 1° steps in azimuth, out to 150 km |
 | Sun, Earth positions | astronomy-engine | ~1 arcminute |
 
