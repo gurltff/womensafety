@@ -409,13 +409,16 @@ export class Globe {
     const alt = cam.length() - 1;
     const want = [];
     if (alt < 1.2) {
+      const camLat = Math.asin(cam.y / cam.length()) / DEG, camLon = Math.atan2(-cam.z, cam.x) / DEG;
       for (let r = 0; r < g.rows; r++) {
         for (let c = 0; c < g.cols; c++) {
-          const lat = 90 - (r + 0.5) * 22.5, lon = -180 + (c + 0.5) * 22.5;
-          const centre = llToWorld(lat, lon, 1);
-          // Distance to the nearest part of the tile, roughly: centre distance minus the tile's radius.
-          const dist = cam.distanceTo(centre) - 0.2 * Math.max(Math.cos(lat * DEG), 0.35);
-          if (dist < alt * 1.6 + 0.05) want.push({ key: `${r}_${c}`, r, c, dist });
+          // Distance from the camera to the nearest point of the tile.
+          const lat = THREE.MathUtils.clamp(camLat, 90 - (r + 1) * 22.5, 90 - r * 22.5);
+          const lon0 = -180 + c * 22.5;
+          const dl = ((camLon - lon0) % 360 + 360) % 360;
+          const lon = dl <= 22.5 ? camLon : (dl - 22.5 < 360 - dl ? lon0 + 22.5 : lon0);
+          const dist = cam.distanceTo(llToWorld(lat, lon, 1));
+          if (dist < alt * 2.5 + 0.05) want.push({ key: `${r}_${c}`, r, c, dist });
         }
       }
     }
@@ -614,7 +617,7 @@ export class Globe {
       const up = this.camera.position.clone().normalize();
       const screenUp = new THREE.Vector3(0, 1, 0).applyQuaternion(this.camera.quaternion).projectOnPlane(up);
       const screenLeft = new THREE.Vector3(-1, 0, 0).applyQuaternion(this.camera.quaternion).projectOnPlane(up);
-      dir = up.multiplyScalar(0.5).add(screenUp.normalize().multiplyScalar(0.75)).add(screenLeft.normalize().multiplyScalar(0.45)).normalize();
+      dir = up.multiplyScalar(0.3).add(screenUp.normalize().multiplyScalar(0.8)).add(screenLeft.normalize().multiplyScalar(0.5)).normalize();
     }
     if (!dir) return;
     const size = this.shadowSize ?? 0.1;
@@ -694,6 +697,7 @@ export class Globe {
     }
     this.tuneControls();
     this.controls.update();
+    this.followGround();
     this.keepAboveGround();
     this.checkNight();
     this.frameNo = (this.frameNo ?? 0) + 1;
@@ -716,6 +720,17 @@ export class Globe {
     return lat < -87.6 ? 0.0006 : lat < -84.6 ? 0.003 : 0.02;
   }
 
+  // In a close-up, keep the pivot on the ground after panning or zooming to the cursor, and go back
+  // to the whole-Moon view once you zoom far out.
+  followGround() {
+    const t = this.controls.target;
+    if (this.flight || t.lengthSq() < 1e-6) return;
+    t.setLength(1 + (this.terrainHeightAt(t) / R_M) * this.relief);
+    if (this.camera.position.distanceTo(t) > 0.6) {
+      this.startFlight(this.camera.position.clone().setLength(Math.max(this.camera.position.length(), 2)), new THREE.Vector3(), 1.002);
+    }
+  }
+
   // Never let the camera pass into the ground, however it is moved.
   keepAboveGround() {
     const p = this.camera.position;
@@ -729,12 +744,20 @@ export class Globe {
   // whole Moon down to a few kilometres anywhere, and dragging never races across the ground.
   tuneControls() {
     this.groundH = this.terrainHeightAt(this.camera.position);
-    if (this.controls.target.lengthSq() > 1e-6) {
-      this.controls.zoomSpeed = 1.2;
-      this.controls.rotateSpeed = 0.5;
-      if (!this.flight) this.controls.minDistance = 0.0003;
+    const c = this.controls;
+    if (c.target.lengthSq() > 1e-6) {
+      // Close-up: orbit around a point on the ground, zoom toward the mouse, drag sideways with the
+      // right button or two fingers. The pivot follows the ground, so you can travel anywhere.
+      c.zoomSpeed = 1.2;
+      c.rotateSpeed = 0.5;
+      c.enablePan = true;
+      c.screenSpacePanning = true;
+      c.zoomToCursor = true;
+      if (!this.flight) c.minDistance = 0.0003;
       return;
     }
+    c.enablePan = false;
+    c.zoomToCursor = false;
     const ground = 1 + ((this.groundH ?? 0) / R_M) * this.relief;
     const alt = Math.max(this.camera.position.length() - ground, 1e-4);
     this.controls.zoomSpeed = Math.log((ground + 0.8 * alt) / (ground + alt)) / Math.log(0.95);

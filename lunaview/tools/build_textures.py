@@ -45,7 +45,7 @@ DETAIL_NORMAL = 2048   # shading pixels per tile side (~18 m, the DEM's own reso
 
 
 GLOBE_COLS, GLOBE_ROWS = 16, 8  # 22.5 degree tiles
-GLOBE_GRID = 129               # vertices per tile side
+GLOBE_GRID = 257               # vertices per tile side (~2.6 km at the equator)
 
 
 def globe_tiles():
