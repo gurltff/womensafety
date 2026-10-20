@@ -5,6 +5,8 @@ Inputs (download with tools/fetch_textures.sh):
   .cache/ldem_16.tif               LOLA elevation, 16 px/deg, km relative to 1737.4 km
   .cache/ldem_80s_80m.lbl/.img     LOLA south polar stereographic DEM, 80 m/px
   .cache/ldem_875s_20m.lbl/.img    LOLA south polar stereographic DEM, 20 m/px (poleward of 87.5 S)
+  .cache/lroc_color_poles.tif      LROC colour mosaic, full resolution 27360x13680
+  .cache/ldem_64.tif               LOLA elevation, 64 px/deg
 
 Outputs in public/textures/:
   lroc_color.jpg (8k) and lroc_color_4k.jpg   globe colour
@@ -12,6 +14,8 @@ Outputs in public/textures/:
   ldem_height.png + terrain.json              8-bit height map for vertex displacement (+ its range)
   polar_height.png + polar_normal.jpg         south-pole patch heights (R*256+G-32768 metres) and shading
   tiles/t{row}_{col}_h.png + _n.jpg           20 m detail tiles near the pole, loaded when zoomed in
+  globe/c{row}_{col}_c.jpg, _n.jpg, _h.png    16 x 8 full-resolution tiles for the whole Moon (~400 m colour,
+                                              ~470 m heights), loaded where the camera zooms in
 Run: python tools/build_textures.py
 """
 import json
@@ -38,6 +42,52 @@ DETAIL_HALF = 74000.0  # detail tiles cover +-74 km around the pole (inside the 
 DETAIL_TILES = 4       # 4 x 4 tiles, each 37 km across
 DETAIL_GRID = 257      # vertices per tile side (~144 m)
 DETAIL_NORMAL = 2048   # shading pixels per tile side (~18 m, the DEM's own resolution)
+
+
+GLOBE_COLS, GLOBE_ROWS = 16, 8  # 22.5 degree tiles
+GLOBE_GRID = 129               # vertices per tile side
+
+
+def globe_tiles():
+    """Full-resolution colour, shading and heights cut into 22.5 x 22.5 degree tiles."""
+    out = OUT / "globe"
+    out.mkdir(exist_ok=True)
+    rgb = tifffile.imread(CACHE / "lroc_color_poles.tif")[..., :3]
+    dem = tifffile.memmap(CACHE / "ldem_64.tif")  # km
+    ch, cw = rgb.shape[0] // GLOBE_ROWS, rgb.shape[1] // GLOBE_COLS
+    dh, dw = dem.shape[0] // GLOBE_ROWS, dem.shape[1] // GLOBE_COLS
+    rows_total = dem.shape[0]
+    for r in range(GLOBE_ROWS):
+        for c in range(GLOBE_COLS):
+            Image.fromarray(rgb[r * ch:(r + 1) * ch, c * cw:(c + 1) * cw]).save(out / f"c{r}_{c}_c.jpg", quality=84, optimize=True)
+            # Heights with a 1-pixel border (wrapping in longitude) so slopes are continuous across tiles.
+            r0, r1 = max(r * dh - 1, 0), min((r + 1) * dh + 1, rows_total)
+            cols = np.arange(c * dw - 1, (c + 1) * dw + 1) % dem.shape[1]
+            h = np.asarray(dem[r0:r1][:, cols], dtype=np.float64) * 1000.0
+            lat = 90.0 - (np.arange(r0, r1) + 0.5) * 180.0 / rows_total
+            dy = math.pi * R_MOON / rows_total
+            dx = 2 * math.pi * R_MOON * np.maximum(np.cos(np.radians(lat)), 0.02) / dem.shape[1]
+            dh_e = np.gradient(h, axis=1) / dx[:, None]
+            dh_n = -np.gradient(h, axis=0) / dy
+            n = np.dstack([-dh_e, -dh_n, np.ones_like(h)])
+            n /= np.linalg.norm(n, axis=2, keepdims=True)
+            n = n[(1 if r0 < r * dh else 0):, 1:-1][:dh]
+            Image.fromarray(((n * 0.5 + 0.5) * 255).round().astype(np.uint8)).save(out / f"c{r}_{c}_n.jpg", quality=85)
+            # Vertex heights at tile edges and evenly between them (shared edges match neighbours).
+            lats = np.linspace(90 - r * 22.5, 90 - (r + 1) * 22.5, GLOBE_GRID)
+            lons = np.linspace(-180 + c * 22.5, -180 + (c + 1) * 22.5, GLOBE_GRID)
+            rr = np.clip((90 - lats) / 180 * rows_total - 0.5, 0, rows_total - 1)
+            cc = ((lons + 180) / 360 * dem.shape[1] - 0.5) % dem.shape[1]
+            R_, C_ = np.meshgrid(rr, cc, indexing="ij")
+            r_lo, c_lo = np.floor(R_).astype(int), np.floor(C_).astype(int)
+            r_hi, c_hi = np.minimum(r_lo + 1, rows_total - 1), (c_lo + 1) % dem.shape[1]
+            fr, fc = R_ - r_lo, C_ - c_lo
+            v = (dem[r_lo, c_lo] * (1 - fr) * (1 - fc) + dem[r_hi, c_lo] * fr * (1 - fc)
+                 + dem[r_lo, c_hi] * (1 - fr) * fc + dem[r_hi, c_hi] * fr * fc) * 1000.0
+            save_heights(v, out / f"c{r}_{c}_h.png")
+    return {"cols": GLOBE_COLS, "rows": GLOBE_ROWS, "grid": GLOBE_GRID,
+            "colour_px": int(cw), "colour_m_per_px": round(2 * math.pi * R_MOON / rgb.shape[1]),
+            "height_m_per_px": round(2 * math.pi * R_MOON / dem.shape[1])}
 
 
 def grid_heights(dem, lab, x0, x1, y0, y1, n):
@@ -122,7 +172,8 @@ def main():
     lo, hi = global_terrain()
     polar = polar_patch()
     polar["detail"] = detail_tiles()
-    meta = {"radius_m": R_MOON, "height_png": {"min_m": lo, "max_m": hi}, "polar": polar,
+    globe = globe_tiles()
+    meta = {"radius_m": R_MOON, "height_png": {"min_m": lo, "max_m": hi}, "polar": polar, "globe": globe,
             "sources": ["NASA SVS CGI Moon Kit (LROC colour, LOLA ldem_16)", "LOLA LDEM_80S_80M"]}
     (OUT / "terrain.json").write_text(json.dumps(meta, indent=1))
     for f in sorted(p for p in OUT.rglob("*") if p.is_file()):

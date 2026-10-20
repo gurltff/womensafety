@@ -20,5 +20,13 @@
  "sources": [
   "NASA SVS CGI Moon Kit (LROC colour, LOLA ldem_16)",
   "LOLA LDEM_80S_80M"
- ]
+ ],
+ "globe": {
+  "cols": 16,
+  "rows": 8,
+  "grid": 129,
+  "colour_px": 1710,
+  "colour_m_per_px": 399,
+  "height_m_per_px": 474
+ }
 }

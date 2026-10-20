@@ -44,7 +44,8 @@ The time chip (bottom right) moves the lighting on the globe to any date. **Play
 | Part | Source | Detail |
 |---|---|---|
 | Size and shape | LOLA heights, 1737.4 km radius | Global ~1.9 km per sample; pole patch ~650 m per vertex; detail tiles ~145 m |
-| Surface colour | LROC WAC mosaic (8k) | ~1.3 km per pixel |
+| Surface colour | LROC WAC mosaic: 8k globe, then 128 full-resolution tiles loaded where you zoom in | ~1.3 km, then ~400 m per pixel |
+| Surface shading | LOLA ldem_64 in the same 128 tiles | ~470 m per pixel |
 | Pole shading | LOLA 80 m DEM; LOLA 20 m DEM in 16 tiles within ~74 km of the pole, loaded as you zoom in | 80 m, then 18 m per pixel |
 | Pole shadows | Real Sun position; shadow area shrinks to what is on screen | ~50 m per texel zoomed out, a few metres up close |
 | Skylines for sites | LOLA 20 m + 80 m DEMs | 1° steps in azimuth, out to 150 km |
@@ -52,6 +53,10 @@ The time chip (bottom right) moves the lighting on the globe to any date. **Play
 
 Check: with real terrain, Shackleton rim comes out **86% sunlit over 2026–2027**, matching the published
 value for that point (Bussey et al. 2010). This is a test in `test/astro.test.js`.
+
+Zoom stops where the data runs out: about 35 km above the ground over most of the Moon, 5 km over the
+80 m pole patch and 1 km over the 20 m pole tiles. Going sharper everywhere needs NASA's 100 m WAC mosaic and
+118 m SLDEM2015 heights (several GB, so they need a real host such as Netlify rather than the preview link).
 
 Not modelled: craters smaller than the DEM spacing, light scattered off nearby slopes, and the Sun's disc
 being partly hidden (a site counts as lit once the Sun's centre clears the skyline).

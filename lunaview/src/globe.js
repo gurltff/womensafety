@@ -16,6 +16,36 @@ const llToWorld = (lat, lon, r = 1) =>
 // Built by tools/build_textures.py from NASA's CGI Moon Kit and LOLA polar data.
 const TEX = 'textures/';
 
+// Bicubic texture filtering (4 bilinear taps) for tile colour and shading. Plain bilinear shows
+// each source pixel as a soft square when zoomed in; bicubic blends them into smooth gradients.
+const BICUBIC = `
+vec4 cubicW(float v) {
+  vec4 n = vec4(1.0, 2.0, 3.0, 4.0) - v;
+  vec4 s = n * n * n;
+  float x = s.x, y = s.y - 4.0 * s.x, z = s.z - 4.0 * s.y + 6.0 * s.x;
+  return vec4(x, y, z, 6.0 - x - y - z) * (1.0 / 6.0);
+}
+vec4 textureBicubic(sampler2D tex, vec2 uv) {
+  vec2 size = vec2(textureSize(tex, 0));
+  vec2 inv = 1.0 / size;
+  uv = uv * size - 0.5;
+  vec2 f = fract(uv);
+  uv -= f;
+  vec4 xc = cubicW(f.x), yc = cubicW(f.y);
+  vec4 c = uv.xxyy + vec2(-0.5, 1.5).xyxy;
+  vec4 s = vec4(xc.xz + xc.yw, yc.xz + yc.yw);
+  vec4 o = (c + vec4(xc.yw, yc.yw) / s) * inv.xxyy;
+  float sx = s.x / (s.x + s.y), sy = s.z / (s.z + s.w);
+  return mix(mix(texture(tex, o.yw), texture(tex, o.xw), sx), mix(texture(tex, o.yz), texture(tex, o.xz), sx), sy);
+}`;
+function bicubic(shader) {
+  shader.fragmentShader = shader.fragmentShader
+    .replace('#include <common>', `#include <common>\n${BICUBIC}`)
+    .replace('#include <map_fragment>', '#ifdef USE_MAP\n  diffuseColor *= textureBicubic(map, vMapUv);\n#endif')
+    .replace('#include <normal_fragment_maps>',
+      THREE.ShaderChunk.normal_fragment_maps.replaceAll('texture2D( normalMap, vNormalMapUv )', 'textureBicubic( normalMap, vNormalMapUv )'));
+}
+
 export class Globe {
   constructor(canvas, labelLayer) {
     this.canvas = canvas;
@@ -35,7 +65,7 @@ export class Globe {
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.08;
     this.controls.enablePan = false;
-    this.controls.minDistance = 1.1;
+    this.controls.minDistance = 1.002;
     this.controls.maxDistance = 9;
     this.controls.rotateSpeed = 0.5;
     this.controls.zoomSpeed = 1.2;
@@ -105,14 +135,24 @@ export class Globe {
     fallback.colorSpace = THREE.SRGBColorSpace;
     this.material = new THREE.MeshStandardMaterial({ map: fallback, bumpMap: fallback, bumpScale: 0.7, roughness: 1, metalness: 0 });
     this.cutY = { value: -2 }; // the sphere is cut away where the polar patch takes over
+    this.chunkMask = { value: new Int32Array(4) }; // and where a full-resolution tile is showing
     this.material.onBeforeCompile = (shader) => {
       shader.uniforms.cutY = this.cutY;
+      shader.uniforms.chunkMask = this.chunkMask;
       shader.vertexShader = shader.vertexShader
-        .replace('#include <common>', '#include <common>\nvarying float vMoonY;')
-        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvMoonY = normalize(position).y;');
+        .replace('#include <common>', '#include <common>\nvarying vec3 vMoonDir;')
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvMoonDir = normalize(position);');
       shader.fragmentShader = shader.fragmentShader
-        .replace('#include <common>', '#include <common>\nvarying float vMoonY;\nuniform float cutY;')
-        .replace('void main() {', 'void main() {\n  if (vMoonY < cutY) discard;');
+        .replace('#include <common>', '#include <common>\nvarying vec3 vMoonDir;\nuniform float cutY;\nuniform ivec4 chunkMask;')
+        .replace('void main() {', `void main() {
+  vec3 dn = normalize(vMoonDir);
+  if (dn.y < cutY) discard;
+  int row = clamp(int((90.0 - degrees(asin(dn.y))) / 22.5), 0, 7);
+  int col = clamp(int((degrees(atan(-dn.z, dn.x)) + 180.0) / 22.5), 0, 15);
+  int bit = row * 16 + col;
+  int word = bit / 32;
+  int m = word == 0 ? chunkMask.x : word == 1 ? chunkMask.y : word == 2 ? chunkMask.z : chunkMask.w;
+  if (((m >> (bit - word * 32)) & 1) == 1) discard;`);
     };
     this.moon = new THREE.Mesh(new THREE.SphereGeometry(1, 720, 360), this.material);
     this.scene.add(this.moon);
@@ -167,26 +207,28 @@ export class Globe {
     return { heights, size: img.width };
   }
 
-  // A terrain mesh on a polar stereographic grid. x, y are metres from the pole (y toward lon 0).
-  // Vertex normals point straight up; slopes come from the normal map so detail survives at any zoom.
-  terrainMesh({ x0, x1, y0, y1, n, heightAt, keep, skirtM = 0, material }) {
+  // A terrain mesh on an n x n grid: polar stereographic (x, y metres from the pole, y toward lon 0)
+  // or, with dirAt, any grid of unit directions. Vertex normals point straight up; slopes come from
+  // the normal map so detail survives at any zoom.
+  terrainMesh({ x0 = 0, x1 = 0, y0 = 0, y1 = 0, n, heightAt, dirAt, keep, skirtM = 0, material }) {
     const ring = skirtM > 0 ? 4 * (n - 1) : 0;
     const count = n * n + ring;
     const base = new Float32Array(count * 3);
     const h = new Float32Array(count);
     const uv = new Float32Array(count * 2);
     const pxy = new Float32Array(count * 2);
-    const put = (k, x, y, hm, u, v) => {
-      const lat = (2 * Math.atan(Math.hypot(x, y) / (2 * R_M))) / DEG - 90;
-      const d = llToWorld(lat, Math.atan2(x, y) / DEG, 1);
+    const X = (j) => x0 + ((x1 - x0) * j) / (n - 1);
+    const Y = (i) => y0 + ((y1 - y0) * i) / (n - 1);
+    const put = (k, i, j, hm) => {
+      const x = X(j), y = Y(i);
+      const d = dirAt ? dirAt(i, j) : llToWorld((2 * Math.atan(Math.hypot(x, y) / (2 * R_M))) / DEG - 90, Math.atan2(x, y) / DEG, 1);
+      const u = j / (n - 1), v = 1 - i / (n - 1);
       base.set([d.x, d.y, d.z], k * 3);
       h[k] = hm;
       uv.set([u, v], k * 2);
       pxy.set([x, y], k * 2);
     };
-    const X = (j) => x0 + ((x1 - x0) * j) / (n - 1);
-    const Y = (i) => y0 + ((y1 - y0) * i) / (n - 1);
-    for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) put(i * n + j, X(j), Y(i), heightAt(i, j), j / (n - 1), 1 - i / (n - 1));
+    for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) put(i * n + j, i, j, heightAt(i, j));
     const idx = [];
     for (let i = 0; i < n - 1; i++) {
       for (let j = 0; j < n - 1; j++) {
@@ -202,7 +244,7 @@ export class Globe {
       for (let i = 0; i < n - 1; i++) edge.push([i, n - 1]);
       for (let j = n - 1; j > 0; j--) edge.push([n - 1, j]);
       for (let i = n - 1; i > 0; i--) edge.push([i, 0]);
-      edge.forEach(([i, j], e) => put(n * n + e, X(j), Y(i), heightAt(i, j) - skirtM, j / (n - 1), 1 - i / (n - 1)));
+      edge.forEach(([i, j], e) => put(n * n + e, i, j, heightAt(i, j) - skirtM));
       for (let e = 0; e < ring; e++) {
         const [i, j] = edge[e], [i2, j2] = edge[(e + 1) % ring];
         const a = i * n + j, b = i2 * n + j2, a2 = n * n + e, b2 = n * n + ((e + 1) % ring);
@@ -317,6 +359,100 @@ export class Globe {
     this.tileMask.value = mask;
   }
 
+  // Full-resolution tiles for the whole Moon: load the ones near the camera, drop far ones.
+  updateChunks() {
+    const g = this.terrain?.globe;
+    if (!g) return;
+    this.chunks ??= new Map();
+    const cam = this.camera.position;
+    const alt = cam.length() - 1;
+    const want = [];
+    if (alt < 1.2) {
+      for (let r = 0; r < g.rows; r++) {
+        for (let c = 0; c < g.cols; c++) {
+          const lat = 90 - (r + 0.5) * 22.5, lon = -180 + (c + 0.5) * 22.5;
+          const centre = llToWorld(lat, lon, 1);
+          // Distance to the nearest part of the tile, roughly: centre distance minus the tile's radius.
+          const dist = cam.distanceTo(centre) - 0.2 * Math.max(Math.cos(lat * DEG), 0.35);
+          if (dist < alt * 1.6 + 0.05) want.push({ key: `${r}_${c}`, r, c, dist });
+        }
+      }
+    }
+    want.sort((a, b) => a.dist - b.dist);
+    const keep = new Set(want.slice(0, 12).map((w) => w.key));
+    const mask = new Int32Array(4);
+    for (const w of want.slice(0, 12)) {
+      let t = this.chunks.get(w.key);
+      if (!t) {
+        t = { mesh: null, used: 0 };
+        this.chunks.set(w.key, t);
+        this.loadChunk(w.r, w.c, g, t);
+      }
+      t.used = performance.now();
+    }
+    for (const [key, t] of this.chunks) {
+      if (!t.mesh) continue;
+      t.mesh.visible = keep.has(key);
+      if (t.mesh.visible) {
+        const [r, c] = key.split('_').map(Number);
+        const bit = r * g.cols + c;
+        mask[bit >> 5] |= 1 << (bit & 31);
+      }
+    }
+    this.chunkMask.value = mask;
+    // Free GPU memory held by tiles nobody has looked at for a while.
+    if (this.chunks.size > 24) {
+      const old = [...this.chunks].filter(([k, t]) => !keep.has(k) && t.mesh).sort((a, b) => a[1].used - b[1].used);
+      for (const [k, t] of old.slice(0, this.chunks.size - 24)) {
+        this.scene.remove(t.mesh);
+        t.mesh.geometry.dispose();
+        t.mesh.material.map?.dispose();
+        t.mesh.material.normalMap?.dispose();
+        t.mesh.material.dispose();
+        this.chunks.delete(k);
+      }
+    }
+  }
+
+  async loadChunk(r, c, g, t) {
+    const name = `${TEX}globe/c${r}_${c}`;
+    const loader = new THREE.TextureLoader();
+    const tex = (url) => new Promise((ok, fail) => loader.load(url, ok, undefined, fail));
+    try {
+      const [{ heights, size: G }, colour, normal] = await Promise.all([
+        this.loadHeights(`${name}_h.png`), tex(`${name}_c.jpg`), tex(`${name}_n.jpg`),
+      ]);
+      colour.colorSpace = THREE.SRGBColorSpace;
+      normal.colorSpace = THREE.NoColorSpace;
+      for (const x of [colour, normal]) {
+        x.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
+        x.wrapS = x.wrapT = THREE.ClampToEdgeWrapping;
+      }
+      const material = new THREE.MeshStandardMaterial({
+        map: colour, normalMap: normal, roughness: 1, metalness: 0, normalScale: new THREE.Vector2(this.relief, this.relief),
+      });
+      material.onBeforeCompile = (shader) => {
+        bicubic(shader);
+        shader.uniforms.cutY = this.cutY;
+        shader.vertexShader = shader.vertexShader
+          .replace('#include <common>', '#include <common>\nvarying float vMoonY;')
+          .replace('#include <begin_vertex>', '#include <begin_vertex>\nvMoonY = normalize(position).y;');
+        shader.fragmentShader = shader.fragmentShader
+          .replace('#include <common>', '#include <common>\nvarying float vMoonY;\nuniform float cutY;')
+          .replace('void main() {', 'void main() {\n  if (vMoonY < cutY) discard;');
+      };
+      const lat0 = 90 - r * 22.5, lon0 = -180 + c * 22.5;
+      t.mesh = this.terrainMesh({
+        n: G, heightAt: (i, j) => heights[i * G + j],
+        dirAt: (i, j) => llToWorld(lat0 - (22.5 * i) / (G - 1), lon0 + (22.5 * j) / (G - 1), 1),
+        skirtM: 1500, material,
+      });
+      t.mesh.visible = false;
+    } catch {
+      this.chunks.delete(`${r}_${c}`);
+    }
+  }
+
   // Vertical exaggeration of the terrain. 1 = true scale.
   setRelief(k) {
     this.relief = k;
@@ -327,7 +463,8 @@ export class Globe {
       this.material.displacementBias = (lo / R_M) * k;
       this.material.normalScale.set(k, k);
     }
-    const meshes = [this.patch, ...(this.detail ? [...this.detail.tiles.values()].map((x) => x.mesh) : [])];
+    const meshes = [this.patch, ...(this.detail ? [...this.detail.tiles.values()].map((x) => x.mesh) : []),
+      ...(this.chunks ? [...this.chunks.values()].map((x) => x.mesh) : [])];
     for (const m of meshes) {
       if (!m) continue;
       this.placeTerrain(m);
@@ -456,7 +593,7 @@ export class Globe {
   }
 
   flyHome() {
-    this.startFlight(llToWorld(-42, this.homeLon ?? 8, 5.2), new THREE.Vector3(), 1.1);
+    this.startFlight(llToWorld(-42, this.homeLon ?? 8, 5.2), new THREE.Vector3(), 1.002);
   }
 
   startFlight(pos, target, minDistance) {
@@ -489,14 +626,35 @@ export class Globe {
       this.controls.target.lerpVectors(f.tFrom, f.tTo, k);
       if (t >= 1) { this.flight = null; this.controls.minDistance = f.minDistance; }
     }
+    this.tuneControls();
     this.controls.update();
-    if ((this.frameNo = (this.frameNo ?? 0) + 1) % 8 === 0) this.updateDetail();
+    this.frameNo = (this.frameNo ?? 0) + 1;
+    if (this.frameNo % 8 === 0) this.updateDetail();
+    if (this.frameNo % 8 === 4) this.updateChunks();
     this.fitShadow();
     if (this.fullLight) this.applyLight();
     this.camera.updateMatrixWorld();
     this.updatePins();
     this.renderer.render(this.scene, this.camera);
     this.onFrame?.();
+  }
+
+  // Zoom and rotate by a share of the height above the surface, so you can zoom smoothly from the
+  // whole Moon down to a few kilometres anywhere, and dragging never races across the ground.
+  tuneControls() {
+    if (this.controls.target.lengthSq() > 1e-6) {
+      this.controls.zoomSpeed = 1.2;
+      this.controls.rotateSpeed = 0.5;
+      return;
+    }
+    const alt = Math.max(this.camera.position.length() - 1, 1e-4);
+    this.controls.zoomSpeed = Math.log((1 + 0.8 * alt) / (1 + alt)) / Math.log(0.95);
+    // Stop zooming where the data runs out, so the ground never turns into big blurry pixels:
+    // ~35 km up over most of the Moon (400 m colour), 5 km over the 80 m pole patch, 1 km over 20 m tiles.
+    const lat = Math.asin(this.camera.position.y / this.camera.position.length()) / DEG;
+    const floor = lat < -87.6 ? 0.0006 : lat < -84.6 ? 0.003 : 0.02;
+    this.controls.minDistance = 1 + floor;
+    this.controls.rotateSpeed = Math.min(0.5, alt * 0.35 + 0.0004);
   }
 
   updatePins() {

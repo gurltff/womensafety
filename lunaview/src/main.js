@@ -42,6 +42,7 @@ function toast(text) {
 
 // ---------- globe ----------
 const globe = new Globe($('globe'), $('labels'));
+window.lunaview = { globe }; // handy for poking at the scene from the browser console
 globe.setSites(SITES, state.site.id);
 globe.onPick = (s) => selectSite(s, true);
 globe.onSurfaceClick = ({ lat, lon }) => {
