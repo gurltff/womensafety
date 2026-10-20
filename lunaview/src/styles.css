@@ -45,7 +45,7 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
   position: absolute; left: 0; top: 0;
   display: flex; align-items: center; gap: 6px;
   margin: -7px 0 0 -7px; padding: 0; border: 0; background: none;
-  pointer-events: auto; white-space: nowrap;
+  pointer-events: none; white-space: nowrap; /* drags pass through to the globe; clicks are matched in Globe.pickAt */
   font: 600 13px/1 var(--font-display); letter-spacing: 0.06em; text-transform: uppercase;
   color: var(--ink); text-shadow: 0 1px 3px #000, 0 0 8px #000;
 }
@@ -102,6 +102,9 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
   pointer-events: none;
 }
 .bottom > * { pointer-events: auto; }
+/* The toolbar's column spans the screen; only its visible pieces take clicks, so the Moon behind stays draggable. */
+.bottom > .center-stack { pointer-events: none; }
+.center-stack > * { pointer-events: auto; }
 .chip {
   display: flex; flex-direction: column; gap: 3px; padding: 12px 20px; border-radius: 22px;
   border: 1px solid var(--line); background: var(--glass); backdrop-filter: blur(10px); text-align: left;

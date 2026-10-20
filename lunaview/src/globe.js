@@ -586,6 +586,15 @@ export class Globe {
   }
 
   pickAt(e) {
+    // Site names let drags through to the globe (pointer-events: none), so clicks on them land here.
+    for (const pin of this.pins) {
+      if (pin.el.hidden) continue;
+      const r = pin.el.getBoundingClientRect();
+      if (e.clientX >= r.left - 4 && e.clientX <= r.right + 4 && e.clientY >= r.top - 4 && e.clientY <= r.bottom + 4) {
+        this.onPick?.(pin.site);
+        return;
+      }
+    }
     const hit = this.pickPoint(e);
     if (hit) this.onSurfaceClick?.(hit);
   }
@@ -670,7 +679,7 @@ export class Globe {
     this.controls.minDistance = Math.min(this.controls.minDistance, minDistance);
     this.flight = {
       from: this.camera.position.clone(), to: pos,
-      tFrom: this.controls.target.clone(), tTo: target, minDistance, t0: performance.now(),
+      tFrom: this.controls.target.clone(), tTo: target, minDistance, t0: performance.now(), upFrom: this.camera.up.clone(),
     };
   }
 
@@ -687,6 +696,7 @@ export class Globe {
       const f = this.flight;
       const t = Math.min(1, (performance.now() - f.t0) / 1800);
       const k = t < 0.5 ? 4 * t ** 3 : 1 - (-2 * t + 2) ** 3 / 2;
+      f.k = k;
       // Slerp the direction and lerp the distance so the camera arcs around the Moon.
       const a = f.from.clone().normalize(), b = f.to.clone().normalize();
       const q = new THREE.Quaternion().setFromUnitVectors(a, b);
@@ -736,7 +746,8 @@ export class Globe {
     const p = this.camera.position;
     this.groundH = this.terrainHeightAt(p);
     const surface = 1 + (this.groundH / R_M) * this.relief;
-    const min = surface + this.groundClearance();
+    const closeUp = this.controls.target.lengthSq() > 1e-6;
+    const min = surface + (closeUp ? Math.min(this.groundClearance(), 0.0012) : this.groundClearance());
     if (p.length() < min) p.setLength(min);
   }
 
@@ -745,7 +756,26 @@ export class Globe {
   tuneControls() {
     this.groundH = this.terrainHeightAt(this.camera.position);
     const c = this.controls;
-    if (c.target.lengthSq() > 1e-6) {
+    // Orbit around the ground's own "up" in a close-up (around the Moon's axis on the globe), so
+    // dragging circles the spot instead of swinging the camera into the ground. Eased while flying.
+    const closeUp = c.target.lengthSq() > 1e-6;
+    const wantUp = closeUp ? c.target.clone().normalize() : new THREE.Vector3(0, 1, 0);
+    const f = this.flight;
+    if (f) {
+      // During a flight, turn from the starting up to the destination's up in step with the flight,
+      // as a rotation (not a blend) so it stays smooth even when up flips right round.
+      const endUp = f.tTo.lengthSq() > 1e-6 ? f.tTo.clone().normalize() : new THREE.Vector3(0, 1, 0);
+      const turn = new THREE.Quaternion().setFromUnitVectors(f.upFrom, endUp);
+      wantUp.copy(f.upFrom).applyQuaternion(new THREE.Quaternion().slerp(turn, f.k ?? 0)).normalize();
+    }
+    if (this.camera.up.angleTo(wantUp) > 1e-5) {
+      this.camera.up.copy(wantUp);
+      c._quat.setFromUnitVectors(this.camera.up, new THREE.Vector3(0, 1, 0));
+      c._quatInverse.copy(c._quat).invert();
+    }
+    // Keep the camera above the spot's horizon in a close-up.
+    c.maxPolarAngle = closeUp ? THREE.MathUtils.degToRad(84) : Math.PI;
+    if (closeUp) {
       // Close-up: orbit around a point on the ground, zoom toward the mouse, drag sideways with the
       // right button or two fingers. The pivot follows the ground, so you can travel anywhere.
       c.zoomSpeed = 1.2;
@@ -753,7 +783,9 @@ export class Globe {
       c.enablePan = true;
       c.screenSpacePanning = true;
       c.zoomToCursor = true;
-      if (!this.flight) c.minDistance = 0.0003;
+      // How close you may zoom to the spot is where the data runs out; tilting toward the horizon
+      // only has to clear the ground.
+      if (!this.flight) c.minDistance = this.groundClearance();
       return;
     }
     c.enablePan = false;
