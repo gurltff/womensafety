@@ -393,7 +393,11 @@ document.querySelectorAll('.tool').forEach((b) => b.addEventListener('click', ()
   const toggle = () => { const on = !b.classList.contains('on'); b.classList.toggle('on', on); b.setAttribute('aria-pressed', String(on)); return on; };
   if (t === 'pins') { const on = toggle(); $('labels').hidden = !on; globe.pins.forEach((p) => { p.mesh.visible = on; }); }
   if (t === 'grid') globe.grid.visible = toggle();
-  if (t === 'sun') { const on = toggle(); globe.setFullLight(!on); if (!on) toast('Showing the whole Moon evenly lit. Turn Sunlight back on to see real lighting for the chosen time.'); }
+  if (t === 'sun') {
+    const on = toggle();
+    globe.setFullLight(!on);
+    toast(on ? 'Real sunlight for the chosen date and time.' : 'Viewing light: terrain lit from the side so it is easy to see anywhere. Turn Sunlight back on for real lighting.');
+  }
   if (t === 'relief') {
     const on = toggle();
     globe.setRelief(on ? 5 : 1);
@@ -421,6 +425,7 @@ $('playBtn').addEventListener('click', (e) => {
   e.currentTarget.setAttribute('aria-pressed', String(state.playing));
   last = performance.now();
 });
+globe.onNight = () => toast('It is night here at the chosen time. Tap Sunlight to switch to a viewing light, or change the time.');
 globe.onFrame = () => {
   const now = performance.now();
   if (state.playing) setTime(new Date(state.time.getTime() + (now - last) * 20000));

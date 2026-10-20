@@ -98,6 +98,10 @@ export class Globe {
     this.onPick = null;
     this.raycaster = new THREE.Raycaster();
     canvas.addEventListener('pointerdown', (e) => { this.down = [e.clientX, e.clientY]; });
+    canvas.addEventListener('dblclick', (e) => {
+      const hit = this.pickPoint(e);
+      if (hit) this.flyToPoint(hit.lat, hit.lon);
+    });
     canvas.addEventListener('pointerup', (e) => {
       if (this.down && Math.hypot(e.clientX - this.down[0], e.clientY - this.down[1]) < 5) this.pickAt(e);
     });
@@ -177,6 +181,7 @@ export class Globe {
         this.maxTex >= 8192 ? load('ldem_normal.jpg') : Promise.resolve(null),
       ]);
       this.material.displacementMap = height;
+      this.globalH = { ...this.imageChannel(height.image), lo: meta.height_png.min_m, hi: meta.height_png.max_m };
       if (normal) {
         normal.colorSpace = THREE.NoColorSpace;
         this.material.normalMap = normal;
@@ -187,6 +192,41 @@ export class Globe {
       this.setRelief(this.relief);
       this.onTextures?.();
     }).catch(() => {});
+  }
+
+  // Red channel of an image as bytes, for reading heights on the CPU.
+  imageChannel(img) {
+    const cv = document.createElement('canvas');
+    cv.width = img.width; cv.height = img.height;
+    const ctx = cv.getContext('2d', { willReadFrequently: true });
+    ctx.drawImage(img, 0, 0);
+    const px = ctx.getImageData(0, 0, img.width, img.height).data;
+    const data = new Uint8Array(img.width * img.height);
+    for (let i = 0; i < data.length; i++) data[i] = px[i * 4];
+    return { data, w: img.width, h: img.height };
+  }
+
+  // Ground height (metres) under a world direction, from the finest data held on the CPU.
+  terrainHeightAt(dir) {
+    const d = dir.clone().normalize();
+    const lat = Math.asin(d.y) / DEG, lon = Math.atan2(-d.z, d.x) / DEG;
+    const bilerp = (get, w, h, r, c) => {
+      r = THREE.MathUtils.clamp(r, 0, h - 1); c = THREE.MathUtils.clamp(c, 0, w - 1);
+      const r0 = Math.floor(r), c0 = Math.floor(c), r1 = Math.min(r0 + 1, h - 1), c1 = Math.min(c0 + 1, w - 1);
+      const fr = r - r0, fc = c - c0;
+      return (get(r0, c0) * (1 - fc) + get(r0, c1) * fc) * (1 - fr) + (get(r1, c0) * (1 - fc) + get(r1, c1) * fc) * fr;
+    };
+    const P = this.polarH;
+    if (P && lat < P.limit) {
+      const rho = 2 * R_M * Math.tan(Math.PI / 4 + (lat * DEG) / 2);
+      const x = rho * Math.sin(lon * DEG), y = rho * Math.cos(lon * DEG);
+      const k = (P.G - 1) / (2 * P.half);
+      return bilerp((r, c) => P.heights[r * P.G + c], P.G, P.G, (P.half - y) * k, (x + P.half) * k);
+    }
+    const g = this.globalH;
+    if (!g) return 0;
+    const v = bilerp((r, c) => g.data[r * g.w + c], g.w, g.h, ((90 - lat) / 180) * g.h - 0.5, ((lon + 180) / 360) * g.w - 0.5);
+    return g.lo + (v / 255) * (g.hi - g.lo);
   }
 
   // Heights are packed losslessly in a PNG: metres = red * 256 + green - 32768.
@@ -293,6 +333,7 @@ export class Globe {
       load('polar_normal.jpg'),
     ]);
     const half = meta.half_m, step = 2, n = Math.floor((G - 1) / step) + 1;
+    this.polarH = { heights, G, half, limit: meta.limit_lat };
     const material = this.regolith(normal);
     // Where a 20 m detail tile is showing, the coarse patch steps aside (bit r*4+c of tileMask).
     const det = meta.detail;
@@ -531,16 +572,19 @@ export class Globe {
     }
   }
 
-  pickAt(e) {
+  pickPoint(e) {
     const r = this.canvas.getBoundingClientRect();
     const ndc = new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
     this.raycaster.setFromCamera(ndc, this.camera);
     const hit = this.raycaster.intersectObjects(this.patch ? [this.patch, this.moon] : [this.moon])[0];
-    if (!hit) return;
+    if (!hit) return null;
     const p = hit.point.clone().normalize();
-    const lat = Math.asin(p.y) / DEG;
-    const lon = Math.atan2(-p.z, p.x) / DEG;
-    this.onSurfaceClick?.({ lat, lon });
+    return { lat: Math.asin(p.y) / DEG, lon: Math.atan2(-p.z, p.x) / DEG };
+  }
+
+  pickAt(e) {
+    const hit = this.pickPoint(e);
+    if (hit) this.onSurfaceClick?.(hit);
   }
 
   setSunDirection(dirMoonFixed) {
@@ -562,19 +606,32 @@ export class Globe {
 
   applyLight() {
     // The light sits just beyond the area it shadows, so its shadow camera covers what is on screen.
-    const dir = this.fullLight ? this.camera.position.clone().normalize() : this.sunDir;
+    let dir = this.sunDir;
+    if (this.fullLight) {
+      // Viewing light: always from the upper side of the view at a low angle, like a relief map,
+      // so craters and ridges read clearly anywhere, day or night.
+      // Light comes from the top-left of the screen, the convention for shaded relief maps.
+      const up = this.camera.position.clone().normalize();
+      const screenUp = new THREE.Vector3(0, 1, 0).applyQuaternion(this.camera.quaternion).projectOnPlane(up);
+      const screenLeft = new THREE.Vector3(-1, 0, 0).applyQuaternion(this.camera.quaternion).projectOnPlane(up);
+      dir = up.multiplyScalar(0.5).add(screenUp.normalize().multiplyScalar(0.75)).add(screenLeft.normalize().multiplyScalar(0.45)).normalize();
+    }
     if (!dir) return;
     const size = this.shadowSize ?? 0.1;
     this.sun.position.copy(this.sunTarget.position).addScaledVector(dir, size * 3 + 0.01);
-    this.earthshine.intensity = this.fullLight ? 0.6 : 0.14;
+    this.earthshine.intensity = this.fullLight ? 0.3 : 0.14;
   }
 
   // Shrink the shadow map to the area being looked at, so shadows sharpen as you zoom in.
   fitShadow() {
     const t = this.controls.target;
-    const centre = t.lengthSq() > 0.25 ? t : this.poleCentre ?? (this.poleCentre = llToWorld(-90, 0, 1));
+    // Shadow the area being looked at: the orbit target in a close-up, else the ground under the camera.
+    const cam = this.camera.position;
+    const centre = t.lengthSq() > 0.25 ? t.clone()
+      : cam.length() < 1.6 ? cam.clone().setLength(1 + (this.groundH ?? 0) / R_M * this.relief)
+      : this.poleCentre ?? (this.poleCentre = llToWorld(-90, 0, 1));
     const size = THREE.MathUtils.clamp(this.camera.position.distanceTo(centre) * 0.9, 0.003, 0.1);
-    if (size === this.shadowSize && this.sunTarget.position.equals(centre)) return;
+    if (Math.abs(size - (this.shadowSize ?? 0)) < size * 0.02 && this.sunTarget.position.distanceTo(centre) < size * 0.05) return;
     this.shadowSize = size;
     this.sunTarget.position.copy(centre);
     const sc = this.sun.shadow.camera;
@@ -588,8 +645,17 @@ export class Globe {
   // Close-up: orbit around the site, looking at it from 2 degrees equatorward and ~50 km up.
   flyTo(site) {
     const target = this.sitePoint(site);
-    const cam = llToWorld(site.lat + 2.2, site.lon, 1.03 + ((site.heightM ?? 0) / R_M) * this.relief);
+    // Outside the detailed pole area, stand further back so the 400 m data stays sharp and whole craters fit.
+    const near = site.lat < -84.6;
+    const back = (near ? 2.2 : 4) * (site.lat > 80 ? -1 : 1);
+    const cam = llToWorld(site.lat + back, site.lon, (near ? 1.03 : 1.07) + ((site.heightM ?? 0) / R_M) * this.relief);
     this.startFlight(cam, target, 0.0005);
+  }
+
+  // Close-up of any spot: same framing as a site close-up.
+  flyToPoint(lat, lon) {
+    const h = this.terrainHeightAt(llToWorld(lat, lon));
+    this.flyTo({ lat, lon, heightM: h });
   }
 
   flyHome() {
@@ -628,6 +694,8 @@ export class Globe {
     }
     this.tuneControls();
     this.controls.update();
+    this.keepAboveGround();
+    this.checkNight();
     this.frameNo = (this.frameNo ?? 0) + 1;
     if (this.frameNo % 8 === 0) this.updateDetail();
     if (this.frameNo % 8 === 4) this.updateChunks();
@@ -639,22 +707,48 @@ export class Globe {
     this.onFrame?.();
   }
 
+  // How close to the ground the camera may get: where the data runs out, so the ground never turns
+  // into big blurry pixels. ~35 km over most of the Moon (400 m colour), 5 km over the 80 m pole
+  // patch, 1 km over the 20 m pole tiles.
+  groundClearance() {
+    const p = this.camera.position;
+    const lat = Math.asin(p.y / p.length()) / DEG;
+    return lat < -87.6 ? 0.0006 : lat < -84.6 ? 0.003 : 0.02;
+  }
+
+  // Never let the camera pass into the ground, however it is moved.
+  keepAboveGround() {
+    const p = this.camera.position;
+    this.groundH = this.terrainHeightAt(p);
+    const surface = 1 + (this.groundH / R_M) * this.relief;
+    const min = surface + this.groundClearance();
+    if (p.length() < min) p.setLength(min);
+  }
+
   // Zoom and rotate by a share of the height above the surface, so you can zoom smoothly from the
   // whole Moon down to a few kilometres anywhere, and dragging never races across the ground.
   tuneControls() {
+    this.groundH = this.terrainHeightAt(this.camera.position);
     if (this.controls.target.lengthSq() > 1e-6) {
       this.controls.zoomSpeed = 1.2;
       this.controls.rotateSpeed = 0.5;
+      if (!this.flight) this.controls.minDistance = 0.0003;
       return;
     }
-    const alt = Math.max(this.camera.position.length() - 1, 1e-4);
-    this.controls.zoomSpeed = Math.log((1 + 0.8 * alt) / (1 + alt)) / Math.log(0.95);
-    // Stop zooming where the data runs out, so the ground never turns into big blurry pixels:
-    // ~35 km up over most of the Moon (400 m colour), 5 km over the 80 m pole patch, 1 km over 20 m tiles.
-    const lat = Math.asin(this.camera.position.y / this.camera.position.length()) / DEG;
-    const floor = lat < -87.6 ? 0.0006 : lat < -84.6 ? 0.003 : 0.02;
-    this.controls.minDistance = 1 + floor;
+    const ground = 1 + ((this.groundH ?? 0) / R_M) * this.relief;
+    const alt = Math.max(this.camera.position.length() - ground, 1e-4);
+    this.controls.zoomSpeed = Math.log((ground + 0.8 * alt) / (ground + alt)) / Math.log(0.95);
+    this.controls.minDistance = ground + this.groundClearance();
     this.controls.rotateSpeed = Math.min(0.5, alt * 0.35 + 0.0004);
+  }
+
+  // Tell the page when the camera is low over ground that is in night at the chosen time.
+  checkNight() {
+    if (this.fullLight || !this.sunDir || !this.onNight) return;
+    const p = this.camera.position;
+    const night = p.length() < 1.5 && p.clone().normalize().dot(this.sunDir) < -0.03;
+    if (night && !this.wasNight) this.onNight();
+    this.wasNight = night;
   }
 
   updatePins() {

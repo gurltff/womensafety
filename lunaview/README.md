@@ -18,7 +18,7 @@ npm run build:single   # one self-contained HTML file in dist-single/
 
 | Screen | Where |
 |---|---|
-| 1. 3D Moon | Opens on start. Drag to rotate, scroll to zoom, click a pin or a spot near the pole. |
+| 1. 3D Moon | Opens on start. Drag to rotate, scroll to zoom, double-click anywhere to fly in close, click a pin or a spot near the pole. **Sunlight** off switches to a viewing light that shows terrain anywhere, even on the night side. |
 | 2. Mission setup | Menu button or the site chip (bottom left). |
 | 3. Mission report | **Run mission**. Score, power and comms timelines, warnings, and a suggested date shift. |
 | 4. Stand on the Moon | **Stand** in the toolbar or from the report. Drag the slider to move the Sun and Earth. |
