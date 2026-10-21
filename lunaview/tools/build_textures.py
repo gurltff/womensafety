@@ -14,6 +14,7 @@ Outputs in public/textures/:
   ldem_height.png + terrain.json              8-bit height map for vertex displacement (+ its range)
   polar_height.png + polar_normal.jpg         south-pole patch heights (R*256+G-32768 metres) and shading
   tiles/t{row}_{col}_h.png + _n.jpg           20 m detail tiles near the pole, loaded when zoomed in
+  sim/s{row}_{col}.png                        80 m heights poleward of 80 S for the rover simulator (4 x 4 tiles)
   globe/c{row}_{col}_c.jpg, _n.jpg, _h.png    16 x 8 full-resolution tiles for the whole Moon (~400 m colour,
                                               ~470 m heights), loaded where the camera zooms in
 Run: python tools/build_textures.py
@@ -42,6 +43,22 @@ DETAIL_HALF = 74000.0  # detail tiles cover +-74 km around the pole (inside the 
 DETAIL_TILES = 4       # 4 x 4 tiles, each 37 km across
 DETAIL_GRID = 257      # vertices per tile side (~144 m)
 DETAIL_NORMAL = 2048   # shading pixels per tile side (~18 m, the DEM's own resolution)
+
+
+SIM_TILES = 4  # the 80 m polar DEM (7600 x 7600) cut into 4 x 4 tiles of 1900 px for the rover simulator
+
+
+def sim_tiles():
+    """Full-resolution 80 m heights for the rover simulator: slopes, shadows and temperatures."""
+    dem, lab = load_dem(CACHE / "ldem_80s_80m.lbl")
+    out = OUT / "sim"
+    out.mkdir(exist_ok=True)
+    n = dem.shape[0] // SIM_TILES
+    for r in range(SIM_TILES):
+        for c in range(SIM_TILES):
+            save_heights(dem[r * n:(r + 1) * n, c * n:(c + 1) * n], out / f"s{r}_{c}.png")
+    return {"tiles": SIM_TILES, "tile_px": n, "scale_m": lab["scale_m"],
+            "line_off": lab["line_off"], "sample_off": lab["sample_off"], "source": "LOLA LDEM_80S_80M"}
 
 
 GLOBE_COLS, GLOBE_ROWS = 16, 8  # 22.5 degree tiles
@@ -173,7 +190,8 @@ def main():
     polar = polar_patch()
     polar["detail"] = detail_tiles()
     globe = globe_tiles()
-    meta = {"radius_m": R_MOON, "height_png": {"min_m": lo, "max_m": hi}, "polar": polar, "globe": globe,
+    sim = sim_tiles()
+    meta = {"radius_m": R_MOON, "height_png": {"min_m": lo, "max_m": hi}, "polar": polar, "globe": globe, "sim": sim,
             "sources": ["NASA SVS CGI Moon Kit (LROC colour, LOLA ldem_16)", "LOLA LDEM_80S_80M"]}
     (OUT / "terrain.json").write_text(json.dumps(meta, indent=1))
     for f in sorted(p for p in OUT.rglob("*") if p.is_file()):

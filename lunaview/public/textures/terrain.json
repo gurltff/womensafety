@@ -28,5 +28,13 @@
   "colour_px": 1710,
   "colour_m_per_px": 399,
   "height_m_per_px": 474
+ },
+ "sim": {
+  "tiles": 4,
+  "tile_px": 1900,
+  "scale_m": 80.0,
+  "line_off": 3799.5,
+  "sample_off": 3799.5,
+  "source": "LOLA LDEM_80S_80M"
  }
 }

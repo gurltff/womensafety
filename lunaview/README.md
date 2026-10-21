@@ -1,7 +1,10 @@
-# LunaView: CLPS Lunar Mission Browser
+# LunaView: lunar rover mission simulator
 
-NASA Space Apps Challenge 2026 prototype. Pick a landing site near the Moon's south pole, a landing date and
-a mission length, and see whether the lander gets sunlight for power and keeps Earth in view for comms.
+NASA Space Apps Challenge 2026 project. Before a company sends a rover to the Moon's south pole, LunaView
+simulates the mission on real NASA terrain and the real sky: where the Sun and Earth will be, which ground will be
+in shadow, how cold it gets, how the battery holds up and whether the rover can climb the slopes. It runs the
+mission many times with realistic uncertainty and reports the **chance of success**, **why missions fail** and
+**what would improve the odds** (another landing date, a bigger battery, heaters, a sunnier route).
 
 ## Run it
 
@@ -9,32 +12,66 @@ a mission length, and see whether the lander gets sunlight for power and keeps E
 cd lunaview
 npm install
 npm run dev            # http://localhost:5173
-npm test               # astronomy + horizon-builder checks
+npm test               # simulator, terrain and astronomy checks
 npm run build          # static site in dist/ (deploy to Netlify)
-npm run build:single   # one self-contained HTML file in dist-single/
 ```
 
-## Screens
+## Using it
 
-| Screen | Where |
+1. **Rover**: pick a preset or enter your own specifications (mass, solar array, battery, power draws, speed,
+   steepest slope, insulation, heaters, temperature limits, whether it needs Earth in view to drive).
+2. **Route**: pick a landing site, then **Draw on map** and click the ground to add points (poleward of 80°S).
+   **Find the sunniest route** plans a path that stays in sunlight and avoids slopes the rover can't climb.
+   **Sun map** shows how much of the mission each spot is sunlit.
+3. **When**: landing date, mission length, how many days the landing could slip, and how many runs.
+4. **Simulate mission**: the forecast shows the success rate, why runs failed, an hour-by-hour chart of battery,
+   ground temperature, sunlight, Earth contact and rover activity, a mission log, and tested suggestions.
+   **Replay on the Moon** drives the rover along the route on the 3D Moon; **Stand where the rover is** shows
+   its sky; **Compare** lines up to three forecasts.
+
+## The simulation
+
+Every 15 minutes of mission time, at the rover's current position:
+
+| What | How |
 |---|---|
-| 1. 3D Moon | Opens on start. Drag to rotate, scroll to zoom, double-click anywhere to fly in close (then scroll zooms toward the mouse, right-drag or two fingers moves sideways, zooming far out returns to the whole Moon), click a pin or a spot near the pole. **Sunlight** off switches to a viewing light that shows terrain anywhere, even on the night side. |
-| 2. Mission setup | Menu button or the site chip (bottom left). |
-| 3. Mission report | **Run mission**. Score, power and comms timelines, warnings, and a suggested date shift. |
-| 4. Stand on the Moon | **Stand** in the toolbar or from the report. Drag the slider to move the Sun and Earth. |
-| 5. Compare | **Add to compare** in the report, then **Compare** in the toolbar (up to 3). |
+| Terrain, slope | NASA LOLA 80 m south polar DEM (LDEM_80S_80M), slopes over 160 m |
+| Sun and Earth | astronomy-engine positions; skyline in their direction traced over the DEM out to 150 km, with lunar curvature |
+| Sunlight on the panels | Share of the Sun's 0.53° disc above the skyline × panel angle (vertical sun-tracking or flat) × distance to the Sun |
+| Ground temperature | Radiative balance of sunlit regolith on the local slope (albedo 0.12, emissivity 0.95); cools toward ~95 K in shadow, with lag |
+| Heaters | Run in shadow: heat leak (W/K) × (minimum inside temperature − ground temperature), minus radioisotope heaters |
+| Battery | Solar in minus avionics, driving (plus climbing work), heaters; hibernation power in the dark |
+| Driving | Slower on slopes; slopes over the rover's limit block the route |
+| Earth contact | Earth above the true skyline; optionally required to drive |
 
-The time chip (bottom right) moves the lighting on the globe to any date. **Play** runs time at 20,000×.
+The rover follows simple operating rules: it waits in sunlight if the route ahead is in shadow, unless the battery
+can carry it across with its reserve intact; when its own spot goes dark it drives to the nearest sunlight along the
+route, forward or back; it hibernates while waiting in the dark.
+
+**Monte Carlo**: each run draws a landing-time slip (± the days you set), solar output 85–100%, driving power
+90–125%, speed 70–105%, battery capacity 85–100%, heat leak 90–130% and avionics power 95–115%.
+
+**Checks** (`npm test`): the simulator's skyline at Shackleton rim matches a separately built LOLA horizon (median
+difference under 0.1°); its lighting gives Shackleton rim ~86% sunlight over 2026–2027, the published value
+(Bussey et al. 2010); synthetic cases (flat sunlit ground, a permanently shadowed site, a 30° slope) behave as expected.
+
+**Limits**: rover presets are illustrative. Slopes are measured over 80 m, so boulders and small craters are not
+seen. Temperatures are a first-order model, not a thermal simulation of your rover. The simulated area is the south
+polar region poleward of 80°S. The operating rules are simpler than a real operations team.
 
 ## How it works
 
 - `src/astro.js`: Sun and Earth direction in the Moon-fixed frame (astronomy-engine + IAU lunar rotation model,
   about 1′ accuracy), converted to elevation and azimuth at the site. Earth parallax is included.
-- `src/mission.js`: hour-by-hour timeline, shadows and comms gaps, warnings, score out of 100, and a ±7-day date search.
+- `src/sim.js`: the rover simulator (one mission, and the Monte Carlo wrapper).
+- `src/terrain.js`: heights, slopes and skylines from the 80 m polar DEM tiles (`public/textures/sim/`).
+- `src/planner.js`: sunlight map over the mission window and the sunniest-route planner.
+- `src/rovers.js`: rover presets and the specification fields.
+- `src/mission.js`: the earlier fixed-lander analysis (power and comms timelines), kept for its tests.
 - `src/globe.js`: the 3D Moon. Real NASA LROC colour, real LOLA heights (vertex displacement + normal map),
   and a 334 km wide south-pole patch from the 80 m LOLA polar DEM that casts real-time shadows from the Sun.
   **Relief** switches between true scale and 5× height. **Close-up** flies to the selected site.
-- `src/panorama.js`: 360° sky strip with the real skyline, Sun and Earth (with its phase), and their paths.
+- `src/panorama.js`: 360° sky from the rover's position with the real skyline, Sun and Earth (with its phase), and their paths.
 - `src/horizons/*.json`: 360° terrain skylines per site, from LOLA LDEM_875S_20M + LDEM_80S_80M out to 150 km.
 - `tools/`: `fetch_textures.sh` downloads NASA data and rebuilds everything; `build_textures.py` makes the
   globe files; `build_horizon.py` makes skylines (for new sites too).

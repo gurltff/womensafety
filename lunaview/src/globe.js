@@ -2,6 +2,9 @@
 // high-detail south-pole patch from the LOLA 80 m polar DEM that casts real shadows from the real Sun.
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { Line2 } from 'three/examples/jsm/lines/Line2.js';
+import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
+import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import fallbackTexture from './assets/moon_1024.jpg';
 
 // Moon-fixed frame (+X lon 0, +Y lon 90E, +Z north) -> three.js world (+Y up).
@@ -206,10 +209,16 @@ export class Globe {
     return { data, w: img.width, h: img.height };
   }
 
-  // Ground height (metres) under a world direction, from the finest data held on the CPU.
+  // Ground height (metres) under a world direction, from the finest data held on the CPU:
+  // the simulator's 80 m tiles where loaded (fineHeight), else the coarser globe data.
   terrainHeightAt(dir) {
     const d = dir.clone().normalize();
     const lat = Math.asin(d.y) / DEG, lon = Math.atan2(-d.z, d.x) / DEG;
+    const fine = this.fineHeight?.(lat, lon);
+    return Number.isFinite(fine) ? fine : this.coarseHeight(lat, lon);
+  }
+
+  coarseHeight(lat, lon) {
     const bilerp = (get, w, h, r, c) => {
       r = THREE.MathUtils.clamp(r, 0, h - 1); c = THREE.MathUtils.clamp(c, 0, w - 1);
       const r0 = Math.floor(r), c0 = Math.floor(c), r1 = Math.min(r0 + 1, h - 1), c1 = Math.min(c0 + 1, w - 1);
@@ -515,6 +524,7 @@ export class Globe {
       m.material.normalScale.set(k, k);
     }
     for (const pin of this.pins) pin.mesh.position.copy(this.sitePoint(pin.site, 0.0004));
+    this.placeMission();
   }
 
   sitePoint(s, lift = 0) {
@@ -579,7 +589,9 @@ export class Globe {
     const r = this.canvas.getBoundingClientRect();
     const ndc = new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
     this.raycaster.setFromCamera(ndc, this.camera);
-    const hit = this.raycaster.intersectObjects(this.patch ? [this.patch, this.moon] : [this.moon])[0];
+    const ground = [this.patch, ...(this.detail ? [...this.detail.tiles.values()].map((t) => t.mesh) : []),
+      ...(this.chunks ? [...this.chunks.values()].map((t) => t.mesh) : []), this.moon].filter((m) => m && m.visible);
+    const hit = this.raycaster.intersectObjects(ground)[0];
     if (!hit) return null;
     const p = hit.point.clone().normalize();
     return { lat: Math.asin(p.y) / DEG, lon: Math.atan2(-p.z, p.x) / DEG };
@@ -689,6 +701,7 @@ export class Globe {
     this.camera.aspect = w / h;
     this.camera.fov = w < 640 ? 50 : 35;
     this.camera.updateProjectionMatrix();
+    for (const l of this.routeLines ?? []) l.material.resolution.set(w, h);
   }
 
   frame() {
@@ -806,9 +819,125 @@ export class Globe {
     this.wasNight = night;
   }
 
+  // ---------- mission graphics: route, waypoints, rover, sunlight overlay ----------
+
+  groundPoint(lat, lon, h, lift = 0) {
+    return llToWorld(lat, lon, 1 + (h / R_M) * this.relief + lift);
+  }
+
+  // points: [{ lat, lon, h, color: [r, g, b] }]. Drawn twice: solid where visible, faint through hills.
+  setRoute(points) {
+    this.routeData = points;
+    for (const l of this.routeLines ?? []) { this.scene.remove(l); l.geometry.dispose(); l.material.dispose(); }
+    this.routeLines = [];
+    if (!points || points.length < 2) return;
+    // A 4 px line where the route is in view, and a faint 2 px copy that shows through hills.
+    for (const [depthTest, opacity, width] of [[true, 1, 4], [false, 0.4, 2]]) {
+      const g = new LineGeometry();
+      g.setColors(points.flatMap((p) => p.color));
+      const m = new LineMaterial({ vertexColors: true, linewidth: width, transparent: true, opacity, depthTest, worldUnits: false });
+      m.resolution.set(this.canvas.clientWidth, this.canvas.clientHeight);
+      const line = new Line2(g, m);
+      line.renderOrder = depthTest ? 2 : 3;
+      line.frustumCulled = false;
+      this.scene.add(line);
+      this.routeLines.push(line);
+    }
+    this.placeMission();
+  }
+
+  // markers: [{ lat, lon, h, kind: 'start' | 'via' | 'end' }]
+  setWaypoints(markers) {
+    for (const m of this.waypointMeshes ?? []) this.scene.remove(m);
+    this.waypointMeshes = (markers ?? []).map((w) => {
+      const color = w.kind === 'start' ? 0xf2c14e : w.kind === 'end' ? 0xffffff : 0x9aa5bb;
+      const mesh = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 8), new THREE.MeshBasicMaterial({ color, depthTest: false }));
+      mesh.renderOrder = 4;
+      mesh.userData = { ...w, size: w.kind === 'via' ? 0.0011 : 0.0016 };
+      this.scene.add(mesh);
+      return mesh;
+    });
+    this.placeMission();
+  }
+
+  setRover(where) {
+    if (!this.rover) {
+      const body = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.7, 1), new THREE.MeshBasicMaterial({ color: 0x6fd39a, depthTest: false }));
+      const ring = new THREE.Mesh(new THREE.RingGeometry(1.6, 2, 24), new THREE.MeshBasicMaterial({ color: 0x6fd39a, transparent: true, opacity: 0.7, side: THREE.DoubleSide, depthTest: false }));
+      this.rover = new THREE.Group();
+      this.rover.add(body, ring);
+      this.rover.renderOrder = 5;
+      body.renderOrder = ring.renderOrder = 5;
+      this.scene.add(this.rover);
+    }
+    this.roverAt = where;
+    this.rover.visible = !!where;
+    this.placeMission();
+  }
+
+  // cells: [{ lat, lon, h, lit }] with lit 0..1, cell size in metres. Shows where the Sun shines.
+  setOverlay(cells, cell) {
+    if (this.overlay) { this.scene.remove(this.overlay); this.overlay.geometry.dispose(); this.overlay = null; }
+    this.overlayData = cells;
+    if (!cells?.length) return;
+    const g = new THREE.BufferGeometry();
+    const col = new Float32Array(cells.length * 3);
+    cells.forEach((c, i) => {
+      // Deep blue (always shadowed) to sunlight yellow (always lit).
+      const a = [0.08, 0.12, 0.35], b = [0.95, 0.76, 0.31];
+      col.set(a.map((v, k) => v + (b[k] - v) * c.lit), i * 3);
+    });
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(cells.length * 3), 3));
+    g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    this.overlay = new THREE.Points(g, new THREE.PointsMaterial({ size: (cell / R_M) * 1.15, vertexColors: true, transparent: true, opacity: 0.55, depthWrite: false }));
+    this.overlay.renderOrder = 1;
+    this.scene.add(this.overlay);
+    this.placeMission();
+  }
+
+  placeMission() {
+    const lift = 0.00002; // ~35 m above the ground
+    if (this.routeLines?.length && this.routeData) {
+      const flat = this.routeData.flatMap((p) => this.groundPoint(p.lat, p.lon, p.h, lift).toArray());
+      for (const line of this.routeLines) {
+        line.geometry.setPositions(flat);
+        line.computeLineDistances();
+      }
+    }
+    for (const m of this.waypointMeshes ?? []) m.position.copy(this.groundPoint(m.userData.lat, m.userData.lon, m.userData.h, lift));
+    if (this.rover && this.roverAt) {
+      const r = this.roverAt;
+      this.rover.position.copy(this.groundPoint(r.lat, r.lon, r.h, lift));
+      this.rover.lookAt(this.rover.position.clone().multiplyScalar(2));
+    }
+    if (this.overlay) {
+      const pos = this.overlay.geometry.attributes.position;
+      this.overlayData.forEach((c, i) => { const v = this.groundPoint(c.lat, c.lon, c.h, lift * 0.5); pos.setXYZ(i, v.x, v.y, v.z); });
+      pos.needsUpdate = true;
+      this.overlay.geometry.computeBoundingSphere();
+    }
+  }
+
+  // Fly to frame a set of points (e.g. a route) from above at an angle.
+  frameRoute(points) {
+    if (!points?.length) return;
+    const c = points.reduce((a, p) => a.add(llToWorld(p.lat, p.lon)), new THREE.Vector3()).normalize();
+    const lat = Math.asin(c.y) / DEG, lon = Math.atan2(-c.z, c.x) / DEG;
+    let span = 0;
+    for (const p of points) span = Math.max(span, llToWorld(p.lat, p.lon).distanceTo(c));
+    const h = this.terrainHeightAt(c);
+    const target = llToWorld(lat, lon, 1 + (h / R_M) * this.relief);
+    const up = Math.max(0.006, span * 2.4);
+    const back = (up / 2) / DEG * (lat > 80 ? -1 : 1);
+    const cam = llToWorld(lat + Math.min(back, 20), lon, 1 + (h / R_M) * this.relief + up);
+    this.startFlight(cam, target, 0.0005);
+  }
+
   updatePins() {
     const w = this.canvas.clientWidth, h = this.canvas.clientHeight;
     const cam = this.camera.position;
+    for (const m of this.waypointMeshes ?? []) m.scale.setScalar(cam.distanceTo(m.position) * m.userData.size);
+    if (this.rover?.visible) this.rover.scale.setScalar(cam.distanceTo(this.rover.position) * 0.006);
     // Sites sit within a few degrees of the pole, so names overlap until the camera is close.
     const showNames = cam.length() < 3;
     this.polarRing.visible = this.showRing !== false && cam.length() > 1.6;
