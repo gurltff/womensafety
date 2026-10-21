@@ -141,7 +141,7 @@ needs a better coordinate before it goes back in. Check all sites against the of
 | Mid-size | Space rover by Poly by Google | CC BY 3.0 |
 | Large | Curiosity Rover by Keen Chan | CC BY 3.0 |
 
-They are in `public/models/` (from Poly Pizza). `src/models.js` loads them and scales each to its rover class
+They are in `public/models/` (from Poly Pizza), converted to JSON glTF by `tools/glb_to_json.mjs` so any static host serves them. `src/models.js` loads them and scales each to its rover class
 (0.9 m, 1.8 m, 3 m long). They appear in the planner on a turntable and in the rover cards, and they drive on the
 Moon in the simulation, drawn larger than life when the camera is far away so they stay visible.
 

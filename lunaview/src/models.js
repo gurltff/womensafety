@@ -5,9 +5,9 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 
 // file: in public/models; forward: the model's own forward axis; credit: shown in the app.
 export const MODELS = {
-  micro: { file: 'models/rover-quaternius.glb', forward: '+z', lengthM: 0.9, credit: 'Rover by Quaternius (CC0)' },
-  mid: { file: 'models/rover-poly.glb', forward: '+z', lengthM: 1.8, credit: 'Space rover by Poly by Google (CC BY 3.0)' },
-  large: { file: 'models/rover-curiosity.glb', forward: '+x', lengthM: 3.0, credit: 'Curiosity Rover by Keen Chan (CC BY 3.0)' },
+  micro: { file: 'models/rover-quaternius.json', forward: '+z', lengthM: 0.9, credit: 'Rover by Quaternius (CC0)' },
+  mid: { file: 'models/rover-poly.json', forward: '+z', lengthM: 1.8, credit: 'Space rover by Poly by Google (CC BY 3.0)' },
+  large: { file: 'models/rover-curiosity.json', forward: '+x', lengthM: 3.0, credit: 'Curiosity Rover by Keen Chan (CC BY 3.0)' },
 };
 
 const loader = new GLTFLoader();
