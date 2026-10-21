@@ -44,6 +44,57 @@ export function prepareRoute(terrain, waypoints, step) {
   return { pts, length: dist, steepest, coarsest, climb: pts.reduce((s, p, i) => s + Math.max(0, i ? p.h - pts[i - 1].h : 0), 0) };
 }
 
+// Terrain hurdles along a route for a given rover: slopes near its limit, depressions (crater floors)
+// to drop into and climb out of, and long climbs. Each: { type, d0, d1, lat, lon, value, text }.
+export function routeHazards(route, rover) {
+  const pts = route.pts, out = [];
+  const lim = rover.maxSlopeDeg;
+  // Steep stretches: slope over 60% of the rover's limit.
+  let run = null;
+  for (const p of pts) {
+    const steep = p.slope > lim * 0.6;
+    if (steep && !run) run = { d0: p.d, max: p.slope, at: p };
+    if (steep && run && p.slope > run.max) { run.max = p.slope; run.at = p; }
+    if (!steep && run) { run.d1 = p.d; out.push(run); run = null; }
+  }
+  if (run) { run.d1 = route.length; out.push(run); }
+  const hz = out.map((r) => ({
+    type: r.max > lim ? 'wall' : 'slope', d0: r.d0, d1: r.d1, lat: r.at.lat, lon: r.at.lon, value: r.max,
+    text: r.max > lim
+      ? `${r.max.toFixed(0)}° slope at km ${(r.at.d / 1000).toFixed(1)}: steeper than the rover can climb (${lim}°)`
+      : `Steep ground: up to ${r.max.toFixed(0)}° over ${Math.max(80, r.d1 - r.d0).toFixed(0)} m from km ${(r.d0 / 1000).toFixed(1)} (rover limit ${lim}°)`,
+  }));
+  // Depressions: a low point with the route rising at least 25 m on both sides within 3 km.
+  for (let i = 1; i < pts.length - 1; i++) {
+    const p = pts[i];
+    if (!(p.h <= pts[i - 1].h && p.h < pts[i + 1].h)) continue;
+    let before = p.h, after = p.h;
+    for (let j = i - 1; j >= 0 && p.d - pts[j].d <= 3000; j--) before = Math.max(before, pts[j].h);
+    for (let j = i + 1; j < pts.length && pts[j].d - p.d <= 3000; j++) after = Math.max(after, pts[j].h);
+    const depth = Math.min(before, after) - p.h;
+    if (depth >= 25 && !hz.some((x) => x.type === 'crater' && Math.abs(x.d0 - p.d) < 1500)) {
+      hz.push({ type: 'crater', d0: p.d, d1: p.d, lat: p.lat, lon: p.lon, value: depth,
+        text: `Drops into a depression ${Math.round(depth)} m deep at km ${(p.d / 1000).toFixed(1)} (a crater floor or valley) and climbs back out` });
+    }
+  }
+  // Long climbs: more than 100 m of ascent within 2 km.
+  for (let i = 0, j = 0; i < pts.length; i++) {
+    while (pts[i].d - pts[j].d > 2000) j++;
+    const rise = pts[i].h - Math.min(...pts.slice(j, i + 1).map((q) => q.h));
+    if (rise > 100 && !hz.some((x) => x.type === 'climb' && pts[i].d - x.d1 < 2000)) {
+      hz.push({ type: 'climb', d0: pts[j].d, d1: pts[i].d, lat: pts[i].lat, lon: pts[i].lon, value: rise,
+        text: `Long climb: ${Math.round(rise)} m up in ${((pts[i].d - pts[j].d) / 1000).toFixed(1)} km, ending at km ${(pts[i].d / 1000).toFixed(1)}` });
+    }
+  }
+  return hz.sort((a, b) => a.d0 - b.d0);
+}
+
+// Wheel slip in loose regolith rises steeply with slope (rover traction tests; Apollo LRV, Yutu-2
+// and VIPER experience): ~5% on the flat, ~50% near the steepest slope the rover is rated for.
+export function slipAt(slope, maxSlope) {
+  return Math.min(0.9, 0.05 + 0.95 * (slope / (maxSlope + 5)) ** 3);
+}
+
 export function pointAt(route, d) {
   const pts = route.pts;
   if (d <= 0) return { ...pts[0], i: 0 };
@@ -124,9 +175,28 @@ export function simulate({ terrain, eph, rover, route, start, days, stepMin = 15
   const stationary = route.length < 1;
   const timeline = [];
   const events = [];
-  const note = (t, level, text) => events.push({ t: new Date(t), level, text });
-  let result = null, shadowStart = null, longestShadowH = 0, lowSoc = 1, drivenH = 0, commsSteps = 0, sunSteps = 0;
-  let lowWarned = false, coldWarned = false, reachedAt = null;
+  let here = null, tempC = null, socNow = 1;
+  const note = (t, level, text, type = 'info', where = here) => events.push({
+    t: new Date(t), level, text, type, d, lat: where?.lat, lon: where?.lon, tempC, soc: socNow,
+  });
+  // Hurdles: spells of shadow, night, no Earth contact, heat, and terrain met along the way.
+  const hurdles = [];
+  const open = {};
+  const spell = (type, on, t, extra) => {
+    let e = open[type];
+    if (on && !e && extra?.say) note(t, 'warning', extra.say, type);
+    if (on && !e) e = open[type] = { type, t0: t, d, lat: here.lat, lon: here.lon, minTempC: Infinity, maxTempC: -Infinity, minSoc: 1, heaterWh: 0, stopped: false };
+    if (!e) return;
+    if (on) {
+      e.minTempC = Math.min(e.minTempC, tempC); e.maxTempC = Math.max(e.maxTempC, tempC);
+      e.minSoc = Math.min(e.minSoc, socNow);
+    } else { e.t1 = t; hurdles.push(e); delete open[type]; }
+  };
+  const terrainHz = route.length >= 1 ? routeHazards(route, rover) : [];
+  const metHz = new Set();
+  let maxSlip = 0, slipWarned = false, minT = Infinity, maxT = -Infinity, energyIn = 0, energyOut = 0, heaterWh = 0;
+  let result = null, shadowStart = null, longestShadowH = 0, lowSoc = 1, drivenH = 0, commsSteps = 0, sunSteps = 0, stepsRun = 0;
+  let lowWarned = false, coldWarned = false, reachedAt = null, hadEarth = true;
 
   for (let s = 0; s <= steps; s++) {
     const t = t0 + s * dt;
@@ -135,9 +205,25 @@ export function simulate({ terrain, eph, rover, route, start, days, stepMin = 15
     // Ground temperature follows equilibrium with lag: warms in ~2 h, cools over ~10 h.
     tSurf = tSurf === null ? env.teq : tSurf + (env.teq - tSurf) * (1 - Math.exp(-dtH / (env.teq > tSurf ? 2 : 10)));
     const sunlit = env.sunVis > 0.5;
+    stepsRun++;
+    here = pos; tempC = tSurf - 273.15; socNow = Math.max(0, soc) / cap;
+    minT = Math.min(minT, tempC); maxT = Math.max(maxT, tempC);
+    // Spells: night (Sun below the horizon), terrain shadow (Sun up but behind hills), no Earth.
+    const night = env.sun.el < 0.27 && !sunlit;
+    spell('night', night, t);
+    spell('shadow', !sunlit && !night, t);
+    spell('comms', !env.earthVis, t);
+    if (s === 0) {
+      note(t, 'info', `Touchdown. Ground ${Math.round(tempC)} °C, Sun ${sunlit ? `${env.sun.el.toFixed(1)}° up` : night ? 'below the horizon' : 'hidden behind terrain'}, Earth ${env.earthVis ? 'in view' : 'out of view'}.`, 'land');
+    }
     if (sunlit) sunSteps++;
     if (env.earthVis) commsSteps++;
-    if (!sunlit && shadowStart === null) shadowStart = t;
+    if (s > 0 && env.earthVis !== hadEarth) note(t, env.earthVis ? 'info' : 'warning', env.earthVis ? 'Earth back in view: contact with mission control restored.' : `Lost contact: Earth went below the skyline${rover.needsComms ? ', so the rover may not drive' : ''}.`, 'comms');
+    hadEarth = env.earthVis;
+    if (!sunlit && shadowStart === null) {
+      shadowStart = t;
+      if (s > 0) note(t, 'warning', night ? `Night falls: the Sun sets. Ground cooling from ${Math.round(tempC)} °C.` : `Entered terrain shadow at km ${(d / 1000).toFixed(1)}: the Sun is behind the hills.`, night ? 'night' : 'shadow');
+    }
     if (sunlit && shadowStart !== null) {
       const hrs = (t - shadowStart) / HOUR;
       if (hrs > longestShadowH) longestShadowH = hrs;
@@ -209,6 +295,8 @@ export function simulate({ terrain, eph, rover, route, start, days, stepMin = 15
       }
       return best && soc - crossWh(best.m) > cap * 0.05 ? best.sgn : 0;
     }
+    spell('heat', reasonsNotToDrive.includes('too hot'), t, { say: `Ground at ${Math.round(tempC)} °C, above the ${rover.maxTempC} °C driving limit: the rover stops to keep from overheating.` });
+    spell('wait', reasonsNotToDrive.includes('waiting for sunlight ahead'), t, { say: `Shadow on the route ahead and not enough battery to cross it: the rover waits in sunlight.` });
     let load, move = 0;
     if (state === 'dead') break;
     if ((arrived || stationary) && !dir) {
@@ -219,12 +307,30 @@ export function simulate({ terrain, eph, rover, route, start, days, stepMin = 15
       const ahead = pointAt(route, d + dir * Math.max(40, rover.speedMh * p.speed * dtH));
       if (ahead.slope > rover.maxSlopeDeg) {
         result = { success: false, cause: 'slope', text: `Route blocked: ${ahead.slope.toFixed(0)}° slope at km ${(d / 1000).toFixed(1)} is steeper than the rover's ${rover.maxSlopeDeg}° limit.` };
-        note(t, 'critical', result.text);
+        note(t, 'critical', result.text, 'wall');
+        hurdles.push({ type: 'wall', t0: t, t1: t, d, lat: ahead.lat, lon: ahead.lon, value: ahead.slope, text: result.text, minTempC: tempC, maxTempC: tempC, minSoc: socNow, fatal: true });
         state = 'park';
         break;
       }
-      const v = rover.speedMh * p.speed * Math.max(0.3, 1 - (0.6 * ahead.slope) / rover.maxSlopeDeg);
+      // Wheel slip on slopes: the rover gets less ground for the same wheel turns and power.
+      const slip = slipAt(ahead.slope, rover.maxSlopeDeg);
+      const v = rover.speedMh * p.speed * (1 - slip) / 0.95;
       move = dir * v * dtH;
+      if (slip > maxSlip) maxSlip = slip;
+      if (slip > 0.3 && !slipWarned) {
+        slipWarned = true;
+        note(t, 'warning', `Wheels slipping ${Math.round(slip * 100)}% on a ${ahead.slope.toFixed(0)}° slope at km ${(d / 1000).toFixed(1)}: progress drops to ${Math.round(v)} m/h.`, 'slip');
+        hurdles.push({ type: 'slip', t0: t, t1: t, d, lat: pos.lat, lon: pos.lon, value: slip, slope: ahead.slope, minTempC: tempC, maxTempC: tempC, minSoc: socNow });
+      }
+      if (slip < 0.15) slipWarned = false;
+      // Terrain hurdles reached on this step.
+      for (const h of terrainHz) {
+        // A slope too steep to climb is reported when the rover is actually stopped by it.
+        if (h.type === 'wall' || metHz.has(h) || (dir > 0 ? d + move < h.d0 || d > h.d1 : true)) continue;
+        metHz.add(h);
+        note(t, h.type === 'wall' ? 'critical' : 'warning', h.text + '.', h.type, h);
+        hurdles.push({ type: h.type, t0: t, t1: t, d: h.d0, lat: h.lat, lon: h.lon, value: h.value, text: h.text, minTempC: tempC, maxTempC: tempC, minSoc: socNow });
+      }
       const uphill = Math.max(0, dir * ahead.grade);
       const climbW = (rover.massKg * 1.62 * (v / 3600) * Math.sin(uphill * DEG)) / 0.5;
       load = rover.idleW * p.idle + rover.driveW * p.drive + climbW + heater;
@@ -237,18 +343,26 @@ export function simulate({ terrain, eph, rover, route, start, days, stepMin = 15
     }
 
     soc = Math.min(cap, soc + (gen - load) * dtH);
+    energyIn += gen * dtH; energyOut += load * dtH; heaterWh += heater * dtH;
+    for (const k of ['night', 'shadow']) if (open[k]) { open[k].heaterWh += heater * dtH; if (state === 'hibernate') open[k].stopped = true; }
+    if (open.comms && (state === 'park' || state === 'charge') && rover.needsComms) open.comms.stopped = true;
     d = Math.min(route.length, Math.max(0, d + move));
     if (!stationary && d >= route.length && reachedAt === null) {
       reachedAt = t;
-      note(t, 'ok', `Reached the destination (${(route.length / 1000).toFixed(1)} km) on day ${Math.floor((t - t0) / (24 * HOUR)) + 1}.`);
+      note(t, 'ok', `Reached the destination (${(route.length / 1000).toFixed(1)} km) on day ${Math.floor((t - t0) / (24 * HOUR)) + 1}.`, 'arrive', route.pts[route.pts.length - 1]);
       if (!mustSurvive) {
         if (record) timeline.push({ t, d, soc: Math.max(0, soc) / cap, gen, load, heater, tSurfC: tSurf - 273.15, sunVis: env.sunVis, earthVis: env.earthVis, sunEl: env.sun.el, sunAz: env.sun.az, earthEl: env.earth.el, earthAz: env.earth.az, state: 'done', lat: route.pts[route.pts.length - 1].lat, lon: route.pts[route.pts.length - 1].lon, h: route.pts[route.pts.length - 1].h, why: '' });
         break;
       }
     }
     lowSoc = Math.min(lowSoc, Math.max(0, soc) / cap);
-    if (soc / cap < 0.2 && !lowWarned) { lowWarned = true; note(t, 'warning', `Battery below 20% (${env.sunVis > 0.5 ? 'in sunlight' : 'in shadow'}).`); }
-    if (heater > rover.idleW && !coldWarned) { coldWarned = true; note(t, 'warning', `Heaters now draw ${Math.round(heater)} W to survive ${Math.round(tSurf - 273.15)} °C ground.`); }
+    if (soc / cap < 0.2 && !lowWarned) {
+      lowWarned = true;
+      note(t, 'warning', `Battery below 20% (${env.sunVis > 0.5 ? 'in sunlight' : 'in shadow'}).`, 'battery');
+      hurdles.push({ type: 'battery', t0: t, t1: t, d, lat: pos.lat, lon: pos.lon, value: soc / cap, minTempC: tempC, maxTempC: tempC, minSoc: socNow });
+    }
+    if (heater > rover.idleW && !coldWarned) { coldWarned = true; note(t, 'warning', `Heaters now draw ${Math.round(heater)} W to survive ${Math.round(tSurf - 273.15)} °C ground.`, 'cold'); }
+    if (heater < rover.idleW * 0.3) coldWarned = false;
 
     if (record) {
       timeline.push({
@@ -261,13 +375,17 @@ export function simulate({ terrain, eph, rover, route, start, days, stepMin = 15
       const inShadow = shadowStart !== null ? ` after ${Math.round((t - shadowStart) / HOUR)} h of shadow` : '';
       const after = reachedAt !== null ? `Reached the destination on day ${Math.floor((reachedAt - t0) / (24 * HOUR)) + 1}, but the battery` : 'Battery';
       result = { success: false, cause: 'battery', text: `${after} ran out on day ${Math.floor((t - t0) / (24 * HOUR)) + 1}${inShadow}; heaters needed ${Math.round(heater)} W at ${Math.round(tSurf - 273.15)} °C.` };
-      note(t, 'critical', result.text);
+      note(t, 'critical', result.text, 'dead');
+      hurdles.push({ type: 'dead', t0: t, t1: t, d, lat: pos.lat, lon: pos.lon, text: result.text, minTempC: tempC, maxTempC: tempC, minSoc: 0, fatal: true });
       state = 'dead';
       if (record) timeline[timeline.length - 1].state = 'dead';
       break;
     }
   }
   if (shadowStart !== null) longestShadowH = Math.max(longestShadowH, (t0 + steps * dt - shadowStart) / HOUR);
+  const tEnd = record && timeline.length ? timeline[timeline.length - 1].t : t0 + steps * dt;
+  for (const k of Object.keys(open)) { open[k].t1 = tEnd; open[k].ongoing = true; hurdles.push(open[k]); }
+  hurdles.sort((a, b) => a.t0 - b.t0);
   if (!result) {
     if (stationary || reachedAt !== null) {
       const day = reachedAt !== null ? Math.floor((reachedAt - t0) / (24 * HOUR)) + 1 : null;
@@ -278,7 +396,8 @@ export function simulate({ terrain, eph, rover, route, start, days, stepMin = 15
   }
   return {
     ...result, start: new Date(t0), days, stepMin, distance: d, routeLength: route.length, minSoc: lowSoc,
-    longestShadowH, drivenH, commsFrac: commsSteps / (steps + 1), sunFrac: sunSteps / (steps + 1), timeline, events, perturb: p, states: STATES,
+    longestShadowH, drivenH, commsFrac: commsSteps / Math.max(1, stepsRun), sunFrac: sunSteps / Math.max(1, stepsRun), timeline, events, perturb: p, states: STATES,
+    hurdles, terrainHazards: terrainHz, maxSlip, minTempC: minT, maxTempC: maxT, energyIn, energyOut, heaterWh, reachedAt: reachedAt === null ? null : new Date(reachedAt),
   };
 }
 

@@ -1,37 +1,35 @@
 import './styles.css';
 import { Globe } from './globe.js';
 import { Panorama } from './panorama.js';
-import { bodyVectors } from './astro.js';
 import { SITES, PLACES, parseCoords } from './sites.js';
 import { Terrain, distance, bearing } from './terrain.js';
-import { prepareRoute, pointAt, ephemeris, environment, simulate, monteCarlo } from './sim.js';
+import { prepareRoute, routeHazards, pointAt, ephemeris, environment, simulate, monteCarlo } from './sim.js';
 import { sunlightMap, planRoute, boxAround } from './planner.js';
 import { ROVERS, ROVER_FIELDS } from './rovers.js';
 
 const $ = (id) => document.getElementById(id);
 const HOUR = 3600 * 1000;
 const DAY = 24 * HOUR;
-const ALL_PLACES = [...SITES.map((s) => ({ ...s, group: 'South pole' })), ...PLACES.map((p) => ({ ...p, group: 'Elsewhere on the Moon' }))];
+const MAX_LEG_M = 200000;
+const ALL_PLACES = [...SITES.map((s) => ({ ...s, group: 'South pole landing sites' })), ...PLACES.map((p) => ({ ...p, group: 'Famous places' }))];
+const EXAMPLE = { name: 'Shackleton rim', waypoints: [{ lat: SITES[0].lat, lon: SITES[0].lon }, { lat: -89.691, lon: -141.26 }] };
 
-// Example mission: a mid-size rover drives 3.5 km west along the sunlit rim from Shackleton.
 const state = {
-  stage: 'plan',
+  mode: 'plan',
   rover: { ...ROVERS[1] },
   roverId: ROVERS[1].id,
-  waypoints: [{ lat: SITES[0].lat, lon: SITES[0].lon }, { lat: -89.691, lon: -141.26 }],
-  landingName: SITES[0].name,
+  waypoints: [],
+  landingName: '',
   start: new Date(Date.UTC(2026, 10, 20)),
   days: 14,
   slip: 2,
   runs: 50,
   mustSurvive: true,
-  pick: null, // 'land' | 'route' while clicking the Moon
   route: null,
+  hazards: [],
   planned: false,
   result: null,
   stale: false,
-  time: new Date(Date.UTC(2026, 10, 20)),
-  saved: [],
 };
 
 // ---------- formatting ----------
@@ -44,11 +42,16 @@ const fromLocalInput = (s) => { const d = new Date(`${s}:00Z`); return Number.is
 const fmtDate = (d) => `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
 const fmtDateTime = (d) => `${fmtDate(d)} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())} UTC`;
 const fmtKm = (m) => `${(m / 1000).toFixed(m < 10000 ? 1 : 0)} km`;
-const fmtH = (h) => (h >= 48 ? `${(h / 24).toFixed(1)} days` : `${Math.round(h)} h`);
-const dayStamp = (t, t0) => `Day ${Math.floor((t - t0) / DAY) + 1} ${pad(new Date(t).getUTCHours())}:${pad(new Date(t).getUTCMinutes())}`;
+const fmtDur = (h) => (h >= 48 ? `${(h / 24).toFixed(1)} days` : h >= 1 ? `${Math.round(h)} h` : `${Math.round(h * 60)} min`);
+const dayStamp = (t, t0) => `Day ${Math.floor((t - t0) / DAY) + 1} · ${pad(new Date(t).getUTCHours())}:${pad(new Date(t).getUTCMinutes())}`;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const tick = () => new Promise((r) => setTimeout(r, 0));
+const DEG = Math.PI / 180;
+const eph15 = ephemeris(15 * 60 * 1000);
+const llDir = (p) => ({ x: Math.cos(p.lat * DEG) * Math.cos(p.lon * DEG), y: Math.sin(p.lat * DEG), z: -Math.cos(p.lat * DEG) * Math.sin(p.lon * DEG) });
 
-function toast(text, ms = 3600) {
+function toast(text, ms = 3800) {
   const t = $('toast');
   t.textContent = text;
   t.hidden = false;
@@ -56,17 +59,49 @@ function toast(text, ms = 3600) {
   toast.timer = setTimeout(() => { t.hidden = true; }, ms);
 }
 
+// Hurdle and event types: icon, title, level.
+const TYPES = {
+  land: ['🛬', 'Touchdown', 'info'],
+  night: ['🌑', 'Lunar night', 'warning'],
+  shadow: ['🌘', 'Terrain shadow', 'warning'],
+  comms: ['📡', 'Earth out of view', 'warning'],
+  heat: ['🔥', 'Too hot to drive', 'warning'],
+  wait: ['⏳', 'Waiting for sunlight ahead', 'warning'],
+  slope: ['📐', 'Steep slope', 'warning'],
+  wall: ['⛔', 'Slope too steep', 'critical'],
+  slip: ['🛞', 'Wheel slip', 'warning'],
+  crater: ['🕳️', 'Crater crossing', 'warning'],
+  climb: ['⛰️', 'Long climb', 'info'],
+  battery: ['🔋', 'Battery low', 'warning'],
+  cold: ['❄️', 'Heaters on', 'warning'],
+  dead: ['✖', 'Rover lost', 'critical'],
+  arrive: ['🏁', 'Destination reached', 'ok'],
+  info: ['•', 'Update', 'info'],
+};
+const typeOf = (k) => TYPES[k] ?? TYPES.info;
+
+const STATE_INFO = {
+  drive: ['Driving', '--ok'],
+  retreat: ['Back to sunlight', '--teal'],
+  charge: ['Charging', '--sun'],
+  park: ['Parked', '--ink-dim'],
+  hibernate: ['Hibernating', '--violet'],
+  done: ['Arrived', '--earth'],
+  dead: ['Lost', '--crit'],
+};
+const stateColour = (k) => cssVar(STATE_INFO[k]?.[1] ?? '--crit');
+
 // ---------- globe and terrain ----------
 const globe = new Globe($('globe'), $('labels'));
-window.lunaview = { globe, state }; // handy for poking at the scene from the browser console
-globe.setSites(SITES, SITES[0].id);
+window.lunaview = { globe, state };
+// (replay, seek and setPlaying are added below for testing from the console)
+globe.setSites(ALL_PLACES, null);
 
 let terrain = null;
 const terrainReady = new Promise((resolve) => {
   const check = () => {
     if (globe.terrain?.sim && globe.polarH && globe.globalH) {
       terrain = new Terrain(globe.terrain, (lat, lon) => globe.coarseHeight(lat, lon));
-      globe.fineHeight = (lat, lon) => (terrain.resolution(lat, lon) ? terrain.height(lat, lon) : NaN);
       resolve(terrain);
     } else setTimeout(check, 150);
   };
@@ -76,40 +111,33 @@ const terrainReady = new Promise((resolve) => {
 globe.onPick = (site) => handleGroundClick(site.lat, site.lon, site.name);
 globe.onSurfaceClick = ({ lat, lon }) => handleGroundClick(lat, lon);
 
+// ============ 1. PLAN ============
+
 function handleGroundClick(lat, lon, name) {
-  if (state.pick === 'land') { setLanding({ lat, lon }, name ?? `Landing at ${fmtLL({ lat, lon })}`); setPick(null); return; }
-  if (state.pick === 'route') { state.waypoints.push({ lat, lon }); state.planned = false; routeChanged(); }
+  if (state.mode !== 'plan') return;
+  const p = { lat, lon };
+  if (!state.waypoints.length) { setLanding(p, name ?? `Landing at ${fmtLL(p)}`); return; }
+  const last = state.waypoints[state.waypoints.length - 1];
+  const leg = distance(last, p);
+  if (leg > MAX_LEG_M) {
+    if (name) { setLanding(p, name); return; }
+    toast(`That point is ${fmtKm(leg)} from the last one, too far for a rover in one go. Click closer, or press "New landing site" to start somewhere else.`);
+    return;
+  }
+  state.waypoints.push(p);
+  state.planned = false;
+  routeChanged();
 }
 
 function setLanding(p, name) {
   state.landingName = name;
-  if (state.waypoints.length) state.waypoints[0] = { lat: p.lat, lon: p.lon }; else state.waypoints = [{ lat: p.lat, lon: p.lon }];
-  // A route from the old landing site would cross the Moon; start a new one.
-  if (state.waypoints.length > 1 && distance(state.waypoints[0], state.waypoints[1]) > 300000) state.waypoints = state.waypoints.slice(0, 1);
+  state.waypoints = [{ lat: p.lat, lon: p.lon }];
   state.planned = false;
   const known = ALL_PLACES.find((x) => Math.abs(x.lat - p.lat) < 1e-6 && Math.abs(x.lon - p.lon) < 1e-6);
   $('fStart').value = known ? known.id : '';
   globe.select(known?.id ?? null);
-  routeChanged().then(() => globe.flyToPoint(p.lat, p.lon));
-}
-
-function setPick(mode) {
-  state.pick = mode;
-  $('landBtn').setAttribute('aria-pressed', String(mode === 'land'));
-  $('drawBtn').setAttribute('aria-pressed', String(mode === 'route'));
-  $('drawBtn').textContent = mode === 'route' ? 'Done adding points' : 'Add route points';
-  document.body.classList.toggle('drawing', !!mode);
-  const hint = $('modeHint');
-  hint.hidden = !mode;
-  hint.textContent = mode === 'land' ? 'Click anywhere on the Moon to land there. Esc to cancel.' : mode === 'route' ? 'Click the ground to add route points. Esc when done.' : '';
-  renderRouteStats();
-}
-
-// ---------- route ----------
-function slopeColour(slope, limit) {
-  if (slope > limit) return [1, 0.42, 0.37];
-  if (slope > limit * 0.7) return [0.95, 0.76, 0.31];
-  return [0.44, 0.83, 0.6];
+  routeChanged();
+  globe.flyToPoint(p.lat, p.lon);
 }
 
 let routeJob = 0;
@@ -117,22 +145,61 @@ async function routeChanged() {
   const job = ++routeJob;
   markStale();
   renderWaypoints();
+  renderInstructions();
   await terrainReady;
   if (state.waypoints.length) await terrain.loadAround(state.waypoints, 30000);
   if (job !== routeJob) return;
   state.route = state.waypoints.length ? prepareRoute(terrain, state.waypoints) : null;
+  state.hazards = state.route && state.waypoints.length > 1 ? routeHazards(state.route, state.rover) : [];
   drawRoute();
   renderRouteStats();
-  updateReadout();
+  renderHazards();
+  drawProfile();
+  // Just landed somewhere dark at the landing time: say so, since the real lighting shows it black.
+  if (state.waypoints.length === 1 && state.mode === 'plan') {
+    const w = state.waypoints[0];
+    const env = environment(terrain, eph15, w.lat, w.lon, terrain.height(w.lat, w.lon), state.start.getTime());
+    if (env.sunVis < 0.5) toast(`At the landing time the Sun is ${env.sun.el < 0 ? 'below the horizon (lunar night)' : 'hidden behind the terrain'} here, so the ground looks black. Press ☀ on the right for an even viewing light, or change the landing date.`, 7000);
+  }
+}
+
+function slopeColour(slope, limit) {
+  if (slope > limit) return [1, 0.42, 0.37];
+  if (slope > limit * 0.6) return [0.95, 0.66, 0.31];
+  return [0.37, 0.83, 0.6];
 }
 
 function drawRoute() {
   const r = state.route;
-  if (!r) { globe.setRoute(null); globe.setWaypoints([]); return; }
+  if (!r) { globe.setRoute(null); globe.setWaypoints([]); globe.setMarkers(null); return; }
   globe.setRoute(r.pts.map((p) => ({ lat: p.lat, lon: p.lon, h: p.h, color: slopeColour(p.slope, state.rover.maxSlopeDeg) })));
   globe.setWaypoints(state.waypoints.map((w, i) => ({
-    ...w, h: terrain.height(w.lat, w.lon), kind: i === 0 ? 'start' : i === state.waypoints.length - 1 ? 'end' : 'via',
+    ...w, h: 0, kind: i === 0 ? 'start' : i === state.waypoints.length - 1 ? 'end' : 'via',
   })));
+  if (state.mode === 'plan') {
+    globe.setMarkers(state.hazards.map((h) => ({ lat: h.lat, lon: h.lon, icon: typeOf(h.type)[0], level: typeOf(h.type)[2], title: typeOf(h.type)[1] })));
+  }
+}
+
+function renderInstructions() {
+  const n = state.waypoints.length;
+  $('routeInstr').innerHTML = !n
+    ? '<b>Click anywhere on the Moon</b> to set the landing site, pick a known place below, or <a href="#" id="exampleLink">load an example route</a>.'
+    : n === 1
+      ? `Landing at <b>${esc(state.landingName)}</b>. Now <b>click the ground</b> to add waypoints; the rover drives through them in order.`
+      : 'Keep clicking to extend the route, or remove points below. Ready? Press <b>Launch simulation</b>.';
+  $('exampleLink')?.addEventListener('click', (e) => { e.preventDefault(); loadExample(); });
+  $('mapHint').innerHTML = state.mode !== 'plan' ? ''
+    : `<b>Click</b> ${n ? 'to add a waypoint' : 'to land'} · Drag to move · Right-drag to tilt · Scroll to zoom`;
+  $('launchBtn').disabled = !n;
+  $('launchHint').textContent = !n ? 'Set a landing site first.' : n === 1 ? 'No route yet: the simulation checks whether the rover survives where it lands.' : '';
+}
+
+function loadExample() {
+  state.waypoints = EXAMPLE.waypoints.map((w) => ({ ...w }));
+  state.landingName = EXAMPLE.name;
+  $('fStart').value = SITES[0].id;
+  routeChanged().then(() => globe.frameRoute(state.route.pts));
 }
 
 function renderWaypoints() {
@@ -140,34 +207,114 @@ function renderWaypoints() {
   ol.textContent = '';
   state.waypoints.forEach((w, i) => {
     const li = document.createElement('li');
-    const label = i === 0 ? 'Landing' : i === state.waypoints.length - 1 ? 'Destination' : `Via ${i}`;
-    li.innerHTML = `<span class="wp-k"></span><span class="mono"></span>${i ? '<button type="button" class="wp-x" aria-label="Remove point">×</button>' : ''}`;
-    li.querySelector('.wp-k').textContent = label;
-    li.querySelector('.mono').textContent = fmtLL(w);
+    const last = i === state.waypoints.length - 1 && i > 0;
+    li.className = last ? 'end' : '';
+    const leg = i ? distance(state.waypoints[i - 1], w) : 0;
+    li.innerHTML = `<span class="wp-n">${i === 0 ? '▼' : last ? '⚑' : i}</span>
+      <span class="wp-name"></span><span class="wp-leg">${i ? `+${fmtKm(leg)}` : ''}</span>
+      ${i ? '<button type="button" class="wp-x" aria-label="Remove point">×</button>' : '<span></span>'}`;
+    const nm = li.querySelector('.wp-name');
+    nm.textContent = i === 0 ? state.landingName || 'Landing' : last ? 'Destination' : `Waypoint ${i}`;
+    const sm = document.createElement('small');
+    sm.textContent = fmtLL(w);
+    nm.appendChild(sm);
     li.querySelector('.wp-x')?.addEventListener('click', () => { state.waypoints.splice(i, 1); state.planned = false; routeChanged(); });
     ol.appendChild(li);
   });
-  $('siteName').textContent = state.rover.name.split(' (')[0].toUpperCase();
+  $('undoBtn').disabled = state.waypoints.length < 2;
+  $('clearBtn').disabled = state.waypoints.length < 2;
+  $('planBtn').disabled = state.waypoints.length < 2;
 }
 
 function renderRouteStats() {
   const r = state.route, el = $('routeStats');
-  if (!r || state.waypoints.length < 2) {
-    el.innerHTML = state.waypoints.length
-      ? `<b>${esc(state.landingName)}</b>. Add route points to drive somewhere; with no route, the simulation checks whether the rover survives where it lands.`
-      : 'Choose a landing place first.';
-    $('siteCoords').textContent = state.waypoints.length ? 'Stays where it lands' : 'No landing site';
-    return;
-  }
+  if (!r || state.waypoints.length < 2) { el.innerHTML = ''; return; }
   const lim = state.rover.maxSlopeDeg, steep = r.steepest.slope;
+  const driveH = r.length / state.rover.speedMh;
   const res = r.coarsest;
-  el.innerHTML = `<b>${fmtKm(r.length)}</b> from ${esc(state.landingName)} · steepest slope <b class="${steep > lim ? 't-bad' : steep > lim * 0.7 ? 't-warn' : ''}">${steep.toFixed(0)}°</b> (rover limit ${lim}°) · climb ${Math.round(r.climb)} m`
-    + `${state.planned ? ' · <b>planned for sunlight</b>' : ''}<br>Terrain: NASA LOLA at ${res <= 100 ? '80 m' : `about ${Math.round(res / 50) * 50} m`} detail${res > 100 ? ', so hills and craters smaller than about 2 km are smoothed out' : ''}.`
-    + (steep > lim ? `<br><span class="t-bad">A ${steep.toFixed(0)}° slope at km ${(r.steepest.d / 1000).toFixed(1)} is too steep. Try <b>Find the sunniest route</b> to go around it.</span>` : '');
-  $('siteCoords').textContent = `${fmtKm(r.length)} route`;
+  const hs = r.pts.map((p) => p.h);
+  el.innerHTML = `
+    <div class="stat"><span>Length</span><b>${fmtKm(r.length)}</b></div>
+    <div class="stat"><span>Drive time</span><b>~${fmtDur(driveH)}</b></div>
+    <div class="stat"><span>Steepest</span><b class="${steep > lim ? 't-bad' : steep > lim * 0.6 ? 't-warn' : 't-ok'}">${steep.toFixed(0)}°</b></div>
+    <div class="stat"><span>Climb</span><b>${Math.round(r.climb)} m</b></div>
+    <div class="stat"><span>Height range</span><b>${Math.round(Math.max(...hs) - Math.min(...hs))} m</b></div>
+    <div class="stat"><span>Terrain data</span><b>${res <= 100 ? '80 m' : `~${Math.round(res / 50) * 50} m`}</b></div>
+    <p class="route-note">${state.planned ? 'Route re-planned to stay in sunlight. ' : ''}Line colour shows slope against the rover's ${lim}° limit: green easy, orange steep, red too steep.${res > 100 ? ' Away from the south pole, NASA LOLA terrain is ~950 m per sample, so small craters and boulders are smoothed out.' : ''}</p>`;
 }
 
-// ---------- route planner and sunlight map ----------
+function renderHazards() {
+  const box = $('hazardBox'), ul = $('hazardList');
+  box.hidden = !state.hazards.length;
+  ul.textContent = '';
+  for (const h of state.hazards) {
+    const [ico, , level] = typeOf(h.type);
+    const li = document.createElement('li');
+    li.className = level;
+    li.innerHTML = `<span class="hz-i">${ico}</span><span></span>`;
+    li.lastChild.textContent = h.text;
+    li.title = 'Show on the Moon';
+    li.addEventListener('click', () => flyToLL(h, 0.004));
+    ul.appendChild(li);
+  }
+}
+function flyToLL(p, dist) {
+  const d = llDir(p);
+  globe.cam.flyTo({ target: globe.camera.position.clone().set(d.x, d.y, d.z), dist, tilt: 55 * DEG });
+}
+
+// Elevation profile with slope colours and hazards.
+function drawProfile() {
+  const r = state.route;
+  const show = state.mode === 'plan' && r && state.waypoints.length > 1;
+  $('profile').hidden = !show;
+  if (!show) return;
+  const c = $('profileCanvas');
+  const dpr = Math.min(window.devicePixelRatio || 1, 2), W = c.clientWidth, H = c.clientHeight;
+  if (!W || !H) { requestAnimationFrame(drawProfile); return; }
+  c.width = W * dpr; c.height = H * dpr;
+  const ctx = c.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const hs = r.pts.map((p) => p.h), lo = Math.min(...hs), hi = Math.max(...hs), span = Math.max(20, hi - lo);
+  const L = 48, R = 8, T = 16, B = 16;
+  const x = (d) => L + (d / r.length) * (W - L - R);
+  const y = (h) => T + (1 - (h - lo) / span) * (H - T - B);
+  ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = 'rgba(95,211,154,0.10)';
+  ctx.beginPath(); ctx.moveTo(x(0), H - B);
+  r.pts.forEach((p) => ctx.lineTo(x(p.d), y(p.h)));
+  ctx.lineTo(x(r.length), H - B); ctx.closePath(); ctx.fill();
+  ctx.lineWidth = 2.5;
+  for (let i = 1; i < r.pts.length; i++) {
+    const a = r.pts[i - 1], b = r.pts[i];
+    const col = slopeColour(Math.max(a.slope, b.slope), state.rover.maxSlopeDeg).map((v) => Math.round(v * 255));
+    ctx.strokeStyle = `rgb(${col})`;
+    ctx.beginPath(); ctx.moveTo(x(a.d), y(a.h)); ctx.lineTo(x(b.d), y(b.h)); ctx.stroke();
+  }
+  ctx.font = `500 10px ${cssVar('--font-mono')}`;
+  ctx.fillStyle = cssVar('--ink-dim');
+  ctx.textAlign = 'right';
+  ctx.fillText(`${Math.round(hi)} m`, L - 6, T + 4);
+  ctx.fillText(`${Math.round(lo)} m`, L - 6, H - B);
+  ctx.textAlign = 'center';
+  const stepKm = r.length > 40000 ? 10 : r.length > 20000 ? 5 : r.length > 8000 ? 2 : r.length > 3000 ? 1 : 0.5;
+  for (let k = 0; k * stepKm * 1000 <= r.length; k++) ctx.fillText(`${k * stepKm} km`, Math.min(W - 20, x(k * stepKm * 1000)), H - 3);
+  let d = 0;
+  state.waypoints.forEach((w, i) => {
+    if (i) d += distance(state.waypoints[i - 1], w);
+    ctx.fillStyle = i === 0 ? cssVar('--sun') : cssVar('--ink');
+    ctx.fillRect(x(d) - 1, T - 6, 2, H - B - T + 6);
+  });
+  ctx.font = '13px sans-serif';
+  for (const h of state.hazards) {
+    const p = pointAt(r, h.d0);
+    ctx.fillText(typeOf(h.type)[0], x(h.d0), Math.max(12, y(p.h) - 6));
+  }
+  $('profileText').textContent = `${fmtKm(r.length)} · climb ${Math.round(r.climb)} m · ${state.hazards.length ? `${state.hazards.length} hazard${state.hazards.length > 1 ? 's' : ''} spotted` : 'no terrain hazards spotted'}`;
+}
+window.addEventListener('resize', () => { drawProfile(); drawStrip(); });
+
+// ---------- route tools: planner and sunlight map ----------
 async function computeSunMap(a, b, label) {
   const len = distance(a, b);
   const margin = Math.max(2500, len * 0.35);
@@ -176,18 +323,17 @@ async function computeSunMap(a, b, label) {
   const box = boxAround(a, b, margin, cell);
   await terrain.loadAround([a, b, box.centre], span);
   return sunlightMap(terrain, ephemeris(HOUR), box, state.start, state.days, {
-    onProgress: (f) => { $('simStatus').textContent = `${label}: ${Math.round(f * 100)}%`; },
+    onProgress: (f) => { $('launchHint').textContent = `${label}: ${Math.round(f * 100)}%`; },
   });
 }
 
 function showSunMap(map) {
-  const cells = map.ll.map((p, k) => ({ ...p, h: map.h[k], lit: map.lit[k] }));
-  globe.setOverlay(cells, map.cell);
-  setTool('map', true);
+  globe.setOverlay(map.ll.map((p, k) => ({ ...p, h: map.h[k], lit: map.lit[k] })), map.cell);
+  setToolOn('map', true);
 }
 
 async function planSunniest() {
-  if (state.waypoints.length < 2) { toast('Add a destination first: choose Add route points, then click the ground.'); return; }
+  if (state.waypoints.length < 2) return;
   await terrainReady;
   $('planBtn').disabled = true;
   try {
@@ -197,32 +343,56 @@ async function planSunniest() {
       const map = await computeSunMap(a, b, `Mapping sunlight for leg ${i}`);
       showSunMap(map);
       const leg = planRoute(map, a, b, { maxSlope: state.rover.maxSlopeDeg - 1 });
-      if (!leg) { toast(`No safe path found for leg ${i}: slopes over ${state.rover.maxSlopeDeg}° block every way.`); return; }
+      if (!leg) { toast(`No safe path for leg ${i}: slopes over ${state.rover.maxSlopeDeg}° block every way.`); return; }
       out.push(...leg.slice(1));
     }
     state.waypoints = out;
     state.planned = true;
-    $('simStatus').textContent = 'Route planned to stay in sunlight and avoid steep slopes.';
+    $('launchHint').textContent = 'Route re-planned to stay in sunlight and avoid steep slopes.';
     await routeChanged();
   } finally {
-    $('planBtn').disabled = false;
+    $('planBtn').disabled = state.waypoints.length < 2;
   }
 }
 
 async function toggleSunMap() {
-  if (globe.overlay) { globe.setOverlay(null); setTool('map', false); return; }
-  if (!state.waypoints.length) { toast('Choose a landing place first.'); return; }
+  if (globe.overlay) { globe.setOverlay(null); setToolOn('map', false); return; }
+  if (!state.waypoints.length) { toast('Set a landing site first.'); return; }
   await terrainReady;
   const a = state.waypoints[0], b = state.waypoints[state.waypoints.length - 1];
-  const map = await computeSunMap(a, b, 'Mapping sunlight');
-  showSunMap(map);
-  $('simStatus').textContent = 'Sunlight map: yellow is sunlit for most of the mission, dark blue is mostly in shadow.';
+  showSunMap(await computeSunMap(a, b, 'Mapping sunlight'));
+  $('launchHint').textContent = 'Sunlight map: yellow is sunlit most of the mission, dark blue mostly in shadow.';
 }
 
-// ---------- rover form ----------
-const fRover = $('fRover');
-for (const r of ROVERS) fRover.add(new Option(r.name, r.id));
-fRover.add(new Option('Custom rover', 'custom'));
+$('undoBtn').addEventListener('click', () => { if (state.waypoints.length > 1) { state.waypoints.pop(); state.planned = false; routeChanged(); } });
+$('clearBtn').addEventListener('click', () => { state.waypoints = state.waypoints.slice(0, 1); state.planned = false; routeChanged(); });
+$('newLandBtn').addEventListener('click', () => { state.waypoints = []; state.landingName = ''; state.planned = false; globe.select(null); routeChanged(); toast('Click the Moon where the rover should land.'); });
+$('planBtn').addEventListener('click', planSunniest);
+
+const fStart = $('fStart');
+fStart.add(new Option('Land at a known place…', ''));
+for (const group of ['South pole landing sites', 'Famous places']) {
+  const og = document.createElement('optgroup');
+  og.label = group;
+  for (const p of ALL_PLACES.filter((x) => x.group === group)) og.appendChild(new Option(p.name, p.id));
+  fStart.appendChild(og);
+}
+fStart.addEventListener('change', () => { const p = ALL_PLACES.find((x) => x.id === fStart.value); if (p) setLanding(p, p.name); });
+
+// ---------- rover ----------
+const ROVER_ART = (s) => `<svg viewBox="0 0 60 30" aria-hidden="true"><g transform="translate(30 30) scale(${s}) translate(-30 -30)">
+  <rect x="14" y="12" width="32" height="8" rx="2"/><path d="M38 12V5h10v4H38"/><circle cx="18" cy="24" r="4"/><circle cx="30" cy="24" r="4"/><circle cx="42" cy="24" r="4"/><path d="M20 12l-4-5"/></g></svg>`;
+const roverCards = $('roverCards');
+ROVERS.forEach((r, i) => {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'rover-card';
+  b.setAttribute('role', 'radio');
+  b.dataset.id = r.id;
+  b.innerHTML = `${ROVER_ART([0.62, 0.82, 1][i])}<b>${['Micro', 'Mid-size', 'Large'][i]}</b><small>${r.massKg} kg · ${r.batteryWh} Wh · ${r.solarW} W solar</small>`;
+  b.addEventListener('click', () => { state.rover = { ...r }; state.roverId = r.id; syncRoverForm(); markStale(); routeChanged(); });
+  roverCards.appendChild(b);
+});
 const specGrid = $('specGrid');
 for (const [key, label, unit, step] of ROVER_FIELDS) {
   const wrap = document.createElement('div');
@@ -231,49 +401,29 @@ for (const [key, label, unit, step] of ROVER_FIELDS) {
   wrap.querySelector('span').textContent = unit;
   wrap.querySelector('input').addEventListener('change', (e) => {
     const v = parseFloat(e.target.value);
-    if (Number.isFinite(v)) { state.rover[key] = v; makeCustom(); markStale(); drawRoute(); renderRouteStats(); }
+    if (Number.isFinite(v)) { state.rover[key] = v; makeCustom(); markStale(); if (key === 'maxSlopeDeg' || key === 'speedMh') routeChanged(); }
   });
   specGrid.appendChild(wrap);
 }
-function makeCustom() { state.roverId = 'custom'; fRover.value = 'custom'; state.rover.name = 'Custom rover'; renderWaypoints(); }
+function makeCustom() { state.roverId = 'custom'; state.rover.name = 'Custom rover'; syncRoverCards(); }
+function syncRoverCards() { for (const b of roverCards.children) b.setAttribute('aria-checked', String(b.dataset.id === state.roverId)); }
 function syncRoverForm() {
-  fRover.value = state.roverId;
+  syncRoverCards();
   for (const [key] of ROVER_FIELDS) $(`r_${key}`).value = state.rover[key];
   $('fPanel').value = state.rover.panel;
   $('fComms').checked = !!state.rover.needsComms;
-  renderWaypoints();
 }
-fRover.addEventListener('change', () => {
-  const r = ROVERS.find((x) => x.id === fRover.value);
-  if (r) { state.rover = { ...r }; state.roverId = r.id; }
-  syncRoverForm(); markStale(); drawRoute(); renderRouteStats();
-});
 $('fPanel').addEventListener('change', (e) => { state.rover.panel = e.target.value; makeCustom(); markStale(); });
 $('fComms').addEventListener('change', (e) => { state.rover.needsComms = e.target.checked; makeCustom(); markStale(); });
 
-// Landing place picker.
-const fStart = $('fStart');
-fStart.add(new Option('Custom spot (clicked or typed)', ''));
-for (const group of ['South pole', 'Elsewhere on the Moon']) {
-  const og = document.createElement('optgroup');
-  og.label = group;
-  for (const p of ALL_PLACES.filter((x) => x.group === group)) og.appendChild(new Option(`${p.name} (${fmtLL(p)})`, p.id));
-  fStart.appendChild(og);
-}
-fStart.addEventListener('change', () => { const p = ALL_PLACES.find((x) => x.id === fStart.value); if (p) setLanding(p, p.name); });
-$('landBtn').addEventListener('click', () => setPick(state.pick === 'land' ? null : 'land'));
-$('drawBtn').addEventListener('click', () => setPick(state.pick === 'route' ? null : 'route'));
-$('undoBtn').addEventListener('click', () => { if (state.waypoints.length > 1) { state.waypoints.pop(); state.planned = false; routeChanged(); } });
-$('clearBtn').addEventListener('click', () => { state.waypoints = state.waypoints.slice(0, 1); state.planned = false; routeChanged(); });
-$('planBtn').addEventListener('click', planSunniest);
-
-// Timing.
+// ---------- mission window ----------
 function syncTiming() {
   $('fDate').value = toLocalInput(state.start);
   $('fDays').value = state.days;
   $('fSlip').value = state.slip;
   $('fRuns').value = String(state.runs);
   $('fSurvive').checked = state.mustSurvive;
+  $('windowHint').textContent = 'The globe shows the real sunlight at landing time. A lunar day lasts 29.5 Earth days: about two weeks of sunlight, then two weeks of night (polar ridges can stay lit much longer).';
 }
 $('fDate').addEventListener('change', (e) => { const d = fromLocalInput(e.target.value); if (d) { state.start = d; setTime(d); markStale(); } });
 $('fDays').addEventListener('change', (e) => { const v = parseInt(e.target.value, 10); if (v >= 1 && v <= 60) { state.days = v; markStale(); } });
@@ -281,178 +431,522 @@ $('fSlip').addEventListener('change', (e) => { const v = parseInt(e.target.value
 $('fRuns').addEventListener('change', (e) => { state.runs = parseInt(e.target.value, 10); });
 $('fSurvive').addEventListener('change', (e) => { state.mustSurvive = e.target.checked; markStale(); });
 
-// ---------- stages ----------
-function setStage(stage) {
-  if (stage !== 'plan' && !state.result) return;
-  state.stage = stage;
-  document.getElementById('app').dataset.stage = stage;
-  document.querySelectorAll('.stages button').forEach((b) => {
-    b.disabled = b.dataset.stage !== 'plan' && !state.result;
-    if (b.dataset.stage === stage) b.setAttribute('aria-current', 'step'); else b.removeAttribute('aria-current');
-  });
-  setPick(null);
-  if (stage === 'plan') { closePanel('report'); openPanel('setup'); stopReplay(); }
-  if (stage === 'forecast') { closePanel('setup'); openPanel('report'); stopReplay(); }
-  if (stage === 'replay') { closePanel('setup'); closePanel('report'); startReplay(); }
-}
-document.querySelectorAll('.stages button').forEach((b) => b.addEventListener('click', () => setStage(b.dataset.stage)));
+function markStale() { if (state.result) state.stale = true; }
 
-// ---------- simulation ----------
-function markStale() {
-  if (state.result && !state.stale) {
-    state.stale = true;
-    const b = document.querySelector('#reportBody .stale');
-    if (b) b.hidden = false;
+// ============ modes ============
+function setMode(mode) {
+  if (mode !== 'plan' && !state.result) return;
+  state.mode = mode;
+  $('app').dataset.mode = mode;
+  document.querySelectorAll('[data-goto]').forEach((b) => {
+    b.disabled = b.dataset.goto !== 'plan' && !state.result;
+    if (b.dataset.goto === mode) b.setAttribute('aria-current', 'step'); else b.removeAttribute('aria-current');
+  });
+  const run = mode === 'run';
+  $('telemetry').hidden = $('feed').hidden = $('runbar').hidden = !run;
+  $('debrief').hidden = mode !== 'debrief';
+  if (!run) { $('banner').hidden = true; setPlaying(false); }
+  if (mode === 'plan') {
+    globe.setRover(null);
+    globe.setTrail(null);
+    globe.setFollow('off');
+    drawRoute();
+    renderInstructions();
+    drawProfile();
+    setTime(state.start);
   }
+  if (run) startRun();
+  if (mode === 'debrief') { globe.setFollow('off'); $('debrief').scrollTop = 0; }
+}
+document.querySelectorAll('[data-goto]').forEach((b) => b.addEventListener('click', () => {
+  if (b.dataset.goto === 'debrief') renderDebrief();
+  setMode(b.dataset.goto);
+}));
+
+// ============ launch: simulate the mission ============
+const COMP_STEPS = ['Loading NASA terrain around the route', 'Tracing skylines and sunlight along the route', 'Simulating the planned mission', 'Running variations with realistic uncertainty', 'Finding the hurdles'];
+function compStep(i, text, f) {
+  $('compSteps').innerHTML = COMP_STEPS.map((s, k) => `<li class="${k < i ? 'done' : k === i ? 'active' : ''}">${esc(s)}</li>`).join('');
+  if (text) $('compText').textContent = text;
+  $('compBar').style.width = `${Math.round((f ?? i / COMP_STEPS.length) * 100)}%`;
 }
 
 let simJob = 0;
-async function runSimulation() {
-  if (!state.waypoints.length) { toast('Choose a landing place first.'); return; }
+async function launch() {
+  if (!state.waypoints.length) { toast('Set a landing site first: click the Moon.'); return; }
   const job = ++simJob;
-  setPick(null);
-  $('simBtn').disabled = $('runBtn').disabled = true;
-  $('simStatus').textContent = 'Loading terrain…';
+  $('computing').hidden = false;
+  $('launchBtn').disabled = true;
   try {
+    compStep(0, 'Loading terrain…', 0.03);
     await terrainReady;
     await routeChanged();
     const r = state.route;
-    // Skylines reach 150 km, so load terrain that far around the route.
-    await terrain.loadAround([r.pts[0], r.pts[r.pts.length - 1]], 150000);
+    await terrain.loadAround([r.pts[0], r.pts[Math.floor(r.pts.length / 2)], r.pts[r.pts.length - 1]], 150000);
+    compStep(1, `${fmtKm(r.length)} route, ${r.pts.length} terrain samples`, 0.12);
+    await tick();
     const args = { terrain, eph: ephemeris(15 * 60 * 1000), rover: { ...state.rover }, route: r, start: state.start, days: state.days, mustSurvive: state.mustSurvive };
-    $('simStatus').textContent = 'Simulating the planned mission…';
-    await new Promise((res) => setTimeout(res, 20));
+    compStep(2, `${state.rover.name}, ${state.days} days from ${fmtDateTime(state.start)}`, 0.2);
+    await tick();
     const nominal = simulate(args);
+    compStep(3, `0 of ${state.runs} variations`, 0.35);
     const mc = await monteCarlo(args, {
       runs: state.runs, slipDays: state.slip,
-      onProgress: (f) => { $('simStatus').textContent = `Simulating ${state.runs} missions with realistic uncertainty… ${Math.round(f * 100)}%`; },
+      onProgress: (f) => compStep(3, `${Math.round(f * state.runs)} of ${state.runs} variations: landing time ±${state.slip} days, panel output, battery health, wheel slip, heat loss`, 0.35 + f * 0.6),
     });
     if (job !== simJob) return;
-    state.result = { nominal, mc, args, rover: { ...state.rover }, waypoints: state.waypoints.slice(), landingName: state.landingName, planned: state.planned, slip: state.slip };
+    compStep(4, `${nominal.hurdles.length} hurdles in the planned run`, 1);
+    await new Promise((res) => setTimeout(res, 350));
+    state.result = { nominal, mc, args, rover: { ...state.rover }, waypoints: state.waypoints.slice(), landingName: state.landingName, planned: state.planned, slip: state.slip, tips: null };
     state.stale = false;
-    $('simStatus').textContent = `Done: ${mc.successes} of ${mc.runs} simulated missions succeeded.`;
-    renderReport();
-    setStage('forecast');
+    replay.t = 0;
+    replay.ended = false;
+    setMode('run');
     findImprovements(state.result);
+  } catch (err) {
+    console.error(err);
+    toast(`Simulation failed: ${err.message}`);
   } finally {
-    $('simBtn').disabled = $('runBtn').disabled = false;
+    $('computing').hidden = true;
+    $('launchBtn').disabled = !state.waypoints.length;
   }
 }
-$('missionForm').addEventListener('submit', (e) => { e.preventDefault(); runSimulation(); });
-$('runBtn').addEventListener('click', runSimulation);
+$('launchBtn').addEventListener('click', launch);
 
-// ---------- forecast ----------
-const CAUSE = {
-  battery: { label: 'Battery ran out' },
-  slope: { label: 'Route blocked by a steep slope' },
-  time: { label: 'Ran out of time' },
+// ============ 2. RUN: the rover drives the mission ============
+const replay = {
+  t: 0, playing: false, mult: 4, lastFrame: 0, lastUi: 0, lastTrail: 0, heading: 0, odometer: 0,
+  shown: new Set(), markers: [], ended: false, cam: 'chase', holdUntil: 0,
+  duration() { const n = state.result?.nominal; return n ? (n.timeline.length - 1) * n.stepMin * 60000 : 0; },
+  // Mission time per real second while driving: the whole drive takes ~40 s to watch at 4x.
+  driveRate() {
+    const n = state.result.nominal;
+    if (this.driveFor !== n) {
+      this.driveFor = n;
+      let moving = 0;
+      for (let i = 1; i < n.timeline.length; i++) if (Math.abs(n.timeline[i].d - n.timeline[i - 1].d) > 0.5) moving++;
+      this.driveMs = Math.max(HOUR / 6, (moving * n.stepMin * 60000) / 40);
+    }
+    return this.driveMs;
+  },
 };
-const STATE_INFO = [
-  ['drive', 'Driving', 'var(--ok)'],
-  ['retreat', 'Driving back to sunlight', 'var(--teal)'],
-  ['charge', 'Charging in sunlight', 'var(--sun)'],
-  ['park', 'Parked', 'var(--ink-dim)'],
-  ['hibernate', 'Hibernating in shadow', 'var(--violet)'],
-  ['done', 'Arrived', 'var(--earth)'],
-  ['dead', 'Lost', 'var(--crit)'],
-];
-const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-const stateColour = (k) => { const c = STATE_INFO.find((x) => x[0] === k)?.[2] ?? 'var(--crit)'; return cssVar(c.slice(4, -1)); };
 
-function verdict(rate) {
-  if (rate >= 0.85) return ['Likely to succeed', 'var(--ok)'];
-  if (rate >= 0.5) return ['Risky', 'var(--warn)'];
-  return ['Unlikely to succeed', 'var(--crit)'];
+function camDistance() {
+  return state.result.args.route.coarsest <= 100 ? 1500 : 6000;
 }
 
-function renderReport() {
-  const { nominal: n, mc, rover, waypoints } = state.result;
-  const [word, colour] = verdict(mc.rate);
-  const C = 2 * Math.PI * 48;
-  const t0 = n.start.getTime();
+function startRun() {
+  const n = state.result.nominal;
+  globe.setRoute(state.result.args.route.pts.map((p) => ({ lat: p.lat, lon: p.lon, h: p.h, color: [0.75, 0.78, 0.85] })));
+  globe.setOverlay(null);
+  setToolOn('map', false);
+  rebuildFeed();
+  replayFrame(true);
+  setCam(replay.cam);
+  setPlaying(!replay.ended);
+  $('feedCount').textContent = `${n.events.length} events`;
+}
+
+function setPlaying(on) {
+  replay.playing = on;
+  replay.lastFrame = performance.now();
+  $('pbPlay').textContent = on ? '❚❚' : '▶';
+  $('pbPlay').setAttribute('aria-label', on ? 'Pause' : 'Play');
+  if (on && replay.t >= replay.duration()) { replay.t = 0; replay.ended = false; rebuildFeed(); }
+}
+$('pbPlay').addEventListener('click', () => setPlaying(!replay.playing));
+document.querySelectorAll('[data-speed]').forEach((b) => b.addEventListener('click', () => {
+  replay.mult = +b.dataset.speed;
+  document.querySelectorAll('[data-speed]').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+}));
+function setCam(mode) {
+  replay.cam = mode;
+  document.querySelectorAll('[data-cam]').forEach((x) => x.setAttribute('aria-pressed', String(x.dataset.cam === mode)));
+  const d = camDistance();
+  globe.setFollow(mode, mode === 'top' ? d * 2.5 : d);
+}
+document.querySelectorAll('[data-cam]').forEach((b) => b.addEventListener('click', () => setCam(b.dataset.cam)));
+$('toDebrief').addEventListener('click', () => { renderDebrief(); setMode('debrief'); });
+$('skyBtn').addEventListener('click', () => openStand());
+
+// Mission state at replay time t, between the 15-minute steps.
+function replayState(t) {
+  const n = state.result.nominal, tl = n.timeline, stepMs = n.stepMin * 60000;
+  const f = Math.max(0, Math.min(tl.length - 1, t / stepMs));
+  const i = Math.min(Math.max(0, tl.length - 2), Math.floor(f)), k = tl.length > 1 ? f - i : 0;
+  const a = tl[i], b = tl[Math.min(tl.length - 1, i + 1)];
+  return { a, b, k, d: a.d + (b.d - a.d) * k, i, f, t: n.start.getTime() + t, live: k < 0.5 ? a : b };
+}
+
+function replayFrame(force) {
+  const res = state.result;
+  if (!res || state.mode !== 'run') return;
+  const now = performance.now();
+  const dur = replay.duration();
+  if (replay.playing && now > replay.holdUntil) {
+    const cur = replayState(replay.t);
+    const driving = Math.abs(cur.b.d - cur.a.d) > 0.5;
+    const rate = (driving ? replay.driveRate() : 12 * HOUR) * (replay.mult / 4);
+    replay.t = Math.min(dur, replay.t + ((now - Math.max(replay.lastFrame, replay.holdUntil)) / 1000) * rate);
+    if (replay.t >= dur) {
+      setPlaying(false);
+      if (!replay.ended) {
+        replay.ended = true;
+        setTimeout(() => { if (state.mode === 'run' && !replay.playing && replay.ended) { renderDebrief(); setMode('debrief'); } }, 2500);
+      }
+    }
+  }
+  replay.lastFrame = now;
+  const s = replayState(replay.t);
+  const route = res.args.route;
+  const here = pointAt(route, s.d);
+  const moving = s.b.d - s.a.d;
+  if (Math.abs(moving) > 0.5) {
+    const ahead = pointAt(route, s.d + Math.sign(moving) * 30);
+    if (distance(here, ahead) > 1) replay.heading = bearing(here, ahead);
+  }
+  const lerpAng = (x, y, k) => x + ((((y - x) % 360) + 540) % 360 - 180) * k;
+  const prevOdo = replay.odometer;
+  replay.odometer = s.d;
+  globe.setRover({
+    lat: here.lat, lon: here.lon, h: here.h, heading: replay.heading,
+    sunAz: lerpAng(s.a.sunAz, s.b.sunAz, s.k), colour: stateColour(s.live.state),
+    odometer: prevOdo === s.d ? undefined : s.d,
+  });
+  if (force || now - replay.lastUi > 100) {
+    replay.lastUi = now;
+    setTime(new Date(s.t));
+    updateTelemetry(s, here);
+    drawStrip();
+    passEvents(s.t);
+  }
+  if (force || now - replay.lastTrail > 250) {
+    replay.lastTrail = now;
+    let maxD = 0;
+    for (let j = 0; j <= s.i && j < res.nominal.timeline.length; j++) maxD = Math.max(maxD, res.nominal.timeline[j].d);
+    maxD = Math.max(maxD, s.d);
+    const pts = route.pts.filter((p) => p.d <= maxD).map((p) => ({ lat: p.lat, lon: p.lon, h: p.h }));
+    const tip = pointAt(route, maxD);
+    pts.push({ lat: tip.lat, lon: tip.lon, h: tip.h });
+    globe.setTrail(pts.length > 1 ? pts : null);
+  }
+}
+
+function updateTelemetry(s, here) {
+  const n = state.result.nominal, live = s.live;
+  const soc = s.a.soc + (s.b.soc - s.a.soc) * s.k;
+  const tempC = s.a.tSurfC + (s.b.tSurfC - s.a.tSurfC) * s.k;
+  const t = new Date(s.t);
+  $('tmDay').textContent = `Day ${Math.floor((s.t - n.start.getTime()) / DAY) + 1}`;
+  $('tmClock').textContent = `${fmtDate(t)} ${pad(t.getUTCHours())}:${pad(t.getUTCMinutes())} UTC`;
+  const badge = $('tmState');
+  badge.textContent = STATE_INFO[live.state]?.[0] ?? live.state;
+  badge.style.color = stateColour(live.state);
+  $('tmWhy').textContent = live.why ? `Why: ${live.why}` : '';
+  const len = state.result.args.route.length;
+  $('tmRoute').style.width = `${len ? (100 * s.d) / len : 100}%`;
+  $('tmDist').textContent = len ? `${(s.d / 1000).toFixed(2)} / ${(len / 1000).toFixed(1)} km` : 'stationary';
+  $('tmBatt').textContent = `${Math.round(soc * 100)}%`;
+  $('tmBattBar').style.width = `${Math.round(soc * 100)}%`;
+  $('tmBattBar').style.background = soc < 0.2 ? cssVar('--crit') : soc < 0.4 ? cssVar('--warn') : cssVar('--ok');
+  $('tmTemp').textContent = `${Math.round(tempC)} °C`;
+  $('tmTemp').style.color = tempC < -100 ? cssVar('--cold') : tempC > 60 ? cssVar('--hot') : '';
+  $('tmTempBar').style.width = `${Math.max(2, Math.min(100, ((tempC + 200) / 330) * 100))}%`;
+  $('tmGen').textContent = `${Math.round(live.gen)} W`;
+  $('tmLoad').textContent = `${Math.round(live.load)} W`;
+  $('tmHeat').textContent = live.heater > 0.5 ? `${Math.round(live.heater)} W` : 'off';
+  $('tmSlope').textContent = `${here.slope.toFixed(0)}° (max ${state.result.rover.maxSlopeDeg}°)`;
+  $('tmSun').textContent = live.sunVis > 0.5 ? `Up ${live.sunEl.toFixed(1)}°` : live.sunEl < 0 ? 'Night' : 'Behind terrain';
+  $('tmSun').style.color = live.sunVis > 0.5 ? cssVar('--sun') : cssVar('--ink-dim');
+  $('tmEarth').textContent = live.earthVis ? 'In contact' : 'Lost';
+  $('tmEarth').style.color = live.earthVis ? cssVar('--earth') : cssVar('--warn');
+  const x = globe.roverScale ?? 1;
+  $('tmScale').textContent = x > 1.5 ? `Rover drawn ${Math.round(x)}× life size so you can see it.` : 'Rover at true size.';
+  $('pbText').textContent = dayStamp(s.t, n.start.getTime());
+  drawSpark(s.f);
+}
+
+function drawSpark(f) {
+  const c = $('tmSpark');
+  const tl = state.result.nominal.timeline;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2), W = c.clientWidth, H = c.clientHeight;
+  if (!W || !H) return;
+  if (c.width !== Math.round(W * dpr)) { c.width = Math.round(W * dpr); c.height = Math.round(H * dpr); }
+  const ctx = c.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  const n = tl.length, upto = Math.min(n - 1, Math.ceil(f));
+  const x = (i) => 4 + (i / Math.max(1, n - 1)) * (W - 8);
+  ctx.fillStyle = 'rgba(155,140,255,0.14)';
+  for (let i = 0; i <= upto; i++) if (tl[i].sunVis <= 0.5) ctx.fillRect(x(i), 0, Math.max(1, (W - 8) / n + 0.5), H);
+  const line = (get, col) => {
+    ctx.beginPath();
+    for (let i = 0; i <= upto; i++) { if (i) ctx.lineTo(x(i), get(tl[i])); else ctx.moveTo(x(i), get(tl[i])); }
+    ctx.strokeStyle = col; ctx.lineWidth = 1.6; ctx.stroke();
+  };
+  line((r) => 4 + (1 - (r.tSurfC + 200) / 330) * (H - 8), cssVar('--hot'));
+  line((r) => 4 + (1 - r.soc) * (H - 8), cssVar('--ok'));
+}
+
+// Events the replay has passed: mission log, banner and markers on the ground.
+function rebuildFeed() {
+  replay.shown = new Set();
+  replay.markers = [];
+  $('feedList').textContent = '';
+  globe.setMarkers(null);
+  passEvents(state.result.nominal.start.getTime() + replay.t, true);
+}
+
+function passEvents(now, quiet = false) {
+  const n = state.result.nominal;
+  let added = false;
+  for (const e of n.events) {
+    if (e.t.getTime() > now || replay.shown.has(e)) continue;
+    replay.shown.add(e);
+    added = true;
+    const [ico, title] = typeOf(e.type);
+    const li = document.createElement('li');
+    li.className = e.level;
+    li.innerHTML = '<span class="f-ico"></span><span><span class="f-t"></span><span class="f-m"></span><span class="f-x"></span></span>';
+    li.querySelector('.f-ico').textContent = ico;
+    li.querySelector('.f-t').textContent = `${dayStamp(e.t.getTime(), n.start.getTime())} · ${title}`;
+    li.querySelector('.f-m').textContent = e.text;
+    li.querySelector('.f-x').textContent = [Number.isFinite(e.tempC) ? `ground ${Math.round(e.tempC)} °C` : null, Number.isFinite(e.soc) ? `battery ${Math.round(e.soc * 100)}%` : null, `km ${(e.d / 1000).toFixed(2)}`].filter(Boolean).join(' · ');
+    li.title = 'Replay from just before this';
+    li.addEventListener('click', () => seek(e.t.getTime() - n.start.getTime() - HOUR));
+    $('feedList').appendChild(li);
+    if (Number.isFinite(e.lat) && ((e.level !== 'info' && e.type !== 'comms' && e.type !== 'cold') || e.type === 'land')) {
+      for (const m of replay.markers) m.label = m.level === 'critical';
+      replay.markers.push({ lat: e.lat, lon: e.lon, icon: ico, level: e.level, title, label: true });
+    }
+    if (!quiet && (e.level !== 'info' || e.type === 'land')) {
+      const b = $('banner');
+      b.className = `banner ${e.level}`;
+      b.innerHTML = '<span class="b-ico"></span><span><small></small><span class="b-msg"></span></span>';
+      b.querySelector('.b-ico').textContent = ico;
+      b.querySelector('small').textContent = `${dayStamp(e.t.getTime(), n.start.getTime())} · ${title}`;
+      b.querySelector('.b-msg').textContent = e.text;
+      b.hidden = false;
+      clearTimeout(passEvents.timer);
+      passEvents.timer = setTimeout(() => { b.hidden = true; }, 5200);
+      // Hold the picture for a moment at important moments.
+      if (e.level === 'critical' || e.level === 'ok' || e.type === 'land') replay.holdUntil = performance.now() + 1800;
+      else if (e.level === 'warning') replay.holdUntil = performance.now() + 700;
+    }
+  }
+  if (added) {
+    globe.setMarkers(replay.markers);
+    const fl = $('feedList');
+    fl.scrollTop = fl.scrollHeight;
+  }
+}
+
+function seek(t) {
+  replay.t = Math.max(0, Math.min(replay.duration(), t));
+  replay.ended = replay.t >= replay.duration();
+  rebuildFeed();
+  replayFrame(true);
+}
+
+// Timeline strip: sunlight, rover activity, events and the playhead.
+function drawStrip() {
+  const c = $('pbStrip');
+  const res = state.result;
+  if (!c || !res || state.mode !== 'run') return;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2), W = c.clientWidth, H = c.clientHeight;
+  if (!W || !H) return;
+  if (c.width !== Math.round(W * dpr)) { c.width = Math.round(W * dpr); c.height = Math.round(H * dpr); }
+  const ctx = c.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const tl = res.nominal.timeline, n = tl.length;
+  ctx.clearRect(0, 0, W, H);
+  const top = 14, band = (H - top - 4) / 2;
+  ctx.fillStyle = cssVar('--shadow');
+  ctx.fillRect(0, top, W, band * 2);
+  const w = Math.max(1, W / n + 0.5);
+  tl.forEach((r, i) => {
+    const xx = (i / n) * W;
+    ctx.fillStyle = r.sunVis > 0.5 ? 'rgba(242,193,78,0.75)' : 'rgba(155,140,255,0.3)';
+    ctx.fillRect(xx, top, w, band - 1);
+    ctx.fillStyle = stateColour(r.state);
+    ctx.fillRect(xx, top + band, w, band);
+  });
+  const t0 = res.nominal.start.getTime(), stepMs = res.nominal.stepMin * 60000;
+  ctx.font = `500 9.5px ${cssVar('--font-mono')}`;
+  ctx.fillStyle = cssVar('--ink-faint');
+  const days = res.nominal.days, every = days > 20 ? 5 : days > 10 ? 2 : 1;
+  for (let d = every; d < days; d += every) ctx.fillText(`D${d + 1}`, ((d * DAY) / stepMs / n) * W + 2, 10);
+  for (const e of res.nominal.events) {
+    if (e.level === 'info' && e.type !== 'land') continue;
+    const xx = ((e.t.getTime() - t0) / stepMs / n) * W;
+    ctx.fillStyle = e.level === 'critical' ? cssVar('--crit') : e.level === 'ok' ? cssVar('--ok') : cssVar('--warn');
+    ctx.beginPath(); ctx.moveTo(xx - 4, top - 6); ctx.lineTo(xx + 4, top - 6); ctx.lineTo(xx, top); ctx.fill();
+  }
+  ctx.fillStyle = '#fff';
+  ctx.fillRect((replay.t / stepMs / n) * W - 1, 2, 3, H - 4);
+}
+function scrubTo(e) {
+  const r = $('pbStrip').getBoundingClientRect();
+  seek(Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * replay.duration());
+}
+let scrubbing = false, wasPlaying = false;
+$('pbStrip').addEventListener('pointerdown', (e) => { scrubbing = true; wasPlaying = replay.playing; e.currentTarget.setPointerCapture(e.pointerId); setPlaying(false); scrubTo(e); });
+$('pbStrip').addEventListener('pointermove', (e) => { if (scrubbing) scrubTo(e); });
+$('pbStrip').addEventListener('pointerup', () => { scrubbing = false; if (wasPlaying) setPlaying(true); });
+
+// ============ 3. DEBRIEF ============
+function verdict(rate) {
+  if (rate >= 0.85) return ['Likely to succeed', '--ok'];
+  if (rate >= 0.5) return ['Risky', '--warn'];
+  return ['Unlikely to succeed', '--crit'];
+}
+
+// Plain-language account of one hurdle: what happened, the conditions, how the rover dealt with it.
+function describeHurdle(h, res) {
+  const rover = res.rover;
+  const dur = fmtDur(((h.t1 ?? h.t0) - h.t0) / HOUR);
+  const tmin = Number.isFinite(h.minTempC) ? Math.round(h.minTempC) : null, tmax = Number.isFinite(h.maxTempC) ? Math.round(h.maxTempC) : null;
+  const still = h.ongoing ? ' It was still going on when the mission ended.' : '';
+  const heat = h.heaterWh > 1 ? ` Heaters used <b>${Math.round(h.heaterWh)} Wh</b> to keep the electronics above ${rover.minTempC} °C.` : '';
+  const batt = ` Battery bottomed out at <b>${Math.round(h.minSoc * 100)}%</b>.`;
+  switch (h.type) {
+    case 'night': return `The Sun set and the rover spent <b>${dur}</b> in the lunar night. The ground cooled to <b>${tmin} °C</b>. ${h.stopped ? 'The rover hibernated to save power.' : 'It stayed awake.'}${heat}${batt}${still}`;
+    case 'shadow': return `Hills blocked the Sun for <b>${dur}</b> at km ${(h.d / 1000).toFixed(1)} while it was still daytime. The ground fell to <b>${tmin} °C</b>. ${h.stopped ? 'The rover hibernated.' : 'The rover ran on battery.'}${heat}${batt}${still}`;
+    case 'comms': return `Earth sat below the skyline for <b>${dur}</b>, so there was no radio link to mission control${rover.needsComms ? ' and the rover was not allowed to drive' : ''}.${still}`;
+    case 'heat': return `The sunlit ground reached <b>${tmax} °C</b>, above the rover's ${rover.maxTempC} °C driving limit, so it paused for <b>${dur}</b> to avoid overheating.${still}`;
+    case 'wait': return `Shadow lay across the route ahead. Rather than risk its battery in the dark, the rover waited <b>${dur}</b> in sunlight for it to clear.${still}`;
+    case 'slip': return `Wheels slipped <b>${Math.round(h.value * 100)}%</b> on a <b>${h.slope.toFixed(0)}°</b> slope at km ${(h.d / 1000).toFixed(1)}: more power for less progress. Ground ${tmin} °C.`;
+    case 'slope': case 'climb': case 'crater': return `${esc(h.text)}. Ground ${tmin} °C and battery ${Math.round(h.minSoc * 100)}% when the rover got there.`;
+    case 'wall': return `${esc(h.text)} The rover cannot go on along this route.`;
+    case 'battery': return `The battery fell below 20% at km ${(h.d / 1000).toFixed(1)} with the ground at ${tmin} °C. The rover is close to losing power.`;
+    case 'dead': return `${esc(h.text)} With no power the heaters stop and the electronics freeze.`;
+    default: return esc(h.text ?? '');
+  }
+}
+
+function debriefHurdles(n) {
+  return n.hurdles.filter((h) => !['night', 'shadow', 'comms', 'heat', 'wait'].includes(h.type) || (h.t1 - h.t0) >= HOUR);
+}
+
+function renderDebrief() {
+  const res = state.result;
+  if (!res) return;
+  const { nominal: n, mc, rover } = res;
+  const [word, col] = verdict(mc.rate);
+  const C = 2 * Math.PI * 56;
   const tl = n.timeline;
+  const t0 = n.start.getTime();
+  const hurdles = debriefHurdles(n);
+  const longestDark = Math.max(0, ...n.hurdles.filter((h) => h.type === 'night' || h.type === 'shadow').map((h) => (h.t1 - h.t0) / HOUR));
+  const sumH = (types) => n.hurdles.filter((h) => types.includes(h.type)).reduce((s, h) => s + (h.t1 - h.t0) / HOUR, 0);
   const counts = {};
   for (const r of tl) counts[r.state] = (counts[r.state] || 0) + 1;
-  const waits = {};
-  for (const r of tl) if (r.why) for (const w of r.why.split(', ')) waits[w] = (waits[w] || 0) + 1;
-  const coldest = Math.min(...tl.map((r) => r.tSurfC)), hottest = Math.max(...tl.map((r) => r.tSurfC));
-  const maxHeater = Math.max(...tl.map((r) => r.heater));
   const causes = Object.entries(mc.causes).sort((a, b) => b[1].length - a[1].length);
-  const routeTxt = waypoints.length > 1 ? `${fmtKm(n.routeLength)} from ${esc(state.result.landingName)}` : `stays at ${esc(state.result.landingName)}`;
+  const CAUSE = { battery: 'Battery ran out', slope: 'Blocked by a slope too steep to climb', time: 'Ran out of time before reaching the destination' };
+  const outcomeCols = { ok: '--ok', battery: '--crit', slope: '--warn', time: '--violet' };
+  const route = res.args.route;
+  const hs = route.pts.map((p) => p.h);
 
-  $('reportBody').innerHTML = `
-    <p class="stale hint" hidden><b>Inputs changed.</b> Simulate again to update this forecast.</p>
-    <p class="hint">${esc(rover.name)} · ${routeTxt} · landing ${fmtDateTime(n.start)} ±${state.result.slip} d · ${n.days} days</p>
-    <div class="score-row">
-      <div class="score-ring" role="img" aria-label="${Math.round(mc.rate * 100)} percent of simulated missions succeeded">
-        <svg viewBox="0 0 112 112"><circle cx="56" cy="56" r="48" stroke="var(--shadow)" stroke-width="10"/>
-          <circle cx="56" cy="56" r="48" stroke="${colour}" stroke-width="10" stroke-dasharray="${C * mc.rate} ${C}"/></svg>
-        <div class="num"><div>${Math.round(mc.rate * 100)}%<small>success</small></div></div>
+  $('debriefBody').innerHTML = `
+    <div class="db-hero">
+      <div class="ring" role="img" aria-label="${Math.round(mc.rate * 100)} percent of simulated missions succeeded">
+        <svg viewBox="0 0 132 132"><circle cx="66" cy="66" r="56" fill="none" stroke="var(--shadow)" stroke-width="12"/>
+          ${mc.rate > 0 ? `<circle cx="66" cy="66" r="56" fill="none" stroke="var(${col})" stroke-width="12" stroke-linecap="round" stroke-dasharray="${C * mc.rate} ${C}"/>` : ''}</svg>
+        <div class="rv"><div><b>${Math.round(mc.rate * 100)}%</b><small>chance of success</small></div></div>
       </div>
       <div>
-        <p class="verdict" style="color:${colour}">${word}</p>
-        <p class="lead">Succeeded in <b>${mc.successes} of ${mc.runs}</b> simulated missions, each with a different landing time, panel output, battery health, driving speed and heat loss.</p>
+        <h2 style="color:var(${n.success ? '--ok' : '--crit'})">${n.success ? 'Mission accomplished' : n.cause === 'battery' ? 'Rover lost' : n.cause === 'slope' ? 'Route blocked' : 'Mission incomplete'}</h2>
+        <p>${esc(n.text)}</p>
+        <p><b style="color:var(${col})">${word}.</b> ${mc.successes} of ${mc.runs} simulated variations succeeded (landing ±${res.slip} days, panel output, battery health, wheel slip and heat loss varied).</p>
+        <p class="hint">${esc(rover.name)} · ${res.waypoints.length > 1 ? `${fmtKm(n.routeLength)} route from ${esc(res.landingName)}` : `stays at ${esc(res.landingName)}`} · landing ${fmtDateTime(n.start)} · ${n.days} days${state.stale ? ' · <b class="t-warn">the plan has changed since this run</b>' : ''}</p>
+      </div>
+      <div class="db-actions">
+        <button class="btn accent" type="button" id="dbReplay">▶ Watch again</button>
+        <button class="btn" type="button" id="dbPlan">Edit the plan</button>
+        <button class="btn" type="button" id="dbDownload">Download report</button>
       </div>
     </div>
-    <div class="nominal"><span class="pill ${n.success ? 'ok' : 'critical'}">As planned</span><span>${esc(n.text)}</span></div>
-    <button class="cta wide watch" type="button" id="toReplay">▶ Watch the rover drive it</button>
 
-    <h3>Why missions failed</h3>
-    ${causes.length ? `<ul class="cause-list">${causes.map(([k, list]) => `
-      <li><div class="cause-bar"><i style="width:${(100 * list.length) / mc.runs}%"></i></div>
-        <div><b>${CAUSE[k]?.label ?? k}</b>: ${list.length} of ${mc.runs} runs<br><span class="hint">${esc(list[0].text)}</span></div></li>`).join('')}</ul>`
-      : '<p class="hint">None of the simulated missions failed.</p>'}
-
-    <h3>The planned mission, hour by hour</h3>
-    <div class="chart-wrap"><canvas id="simChart" aria-label="Battery, ground temperature, sunlight, Earth contact and rover activity over the mission. Click to replay from that moment."></canvas></div>
-    <div class="legend">
-      <span><i style="background:var(--ok)"></i>Battery</span>
-      <span><i style="background:var(--crit)"></i>Ground temperature</span>
-      <span><i style="background:var(--sun)"></i>Sunlight</span>
-      <span><i style="background:var(--earth)"></i>Earth in view</span>
+    <div class="db-grid">
+      <div class="db-num"><span>Distance driven</span><b>${fmtKm(n.distance)}</b><small>of ${fmtKm(n.routeLength || 0)} planned</small></div>
+      <div class="db-num"><span>Arrived</span><b>${n.reachedAt ? `Day ${Math.floor((n.reachedAt - t0) / DAY) + 1}` : '—'}</b><small>${n.reachedAt ? `after ${fmtDur((n.reachedAt - t0) / HOUR)}` : res.waypoints.length > 1 ? 'did not arrive' : 'no route'}</small></div>
+      <div class="db-num"><span>Coldest ground</span><b style="color:var(--cold)">${Math.round(n.minTempC)} °C</b><small>hottest <span style="color:var(--hot)">${Math.round(n.maxTempC)} °C</span></small></div>
+      <div class="db-num"><span>Lowest battery</span><b class="${n.minSoc < 0.2 ? 't-bad' : n.minSoc < 0.4 ? 't-warn' : ''}">${Math.max(0, Math.round(n.minSoc * 100))}%</b><small>${rover.batteryWh} Wh pack</small></div>
+      <div class="db-num"><span>Energy in / used</span><b>${(n.energyIn / 1000).toFixed(1)} / ${(n.energyOut / 1000).toFixed(1)} kWh</b><small>heaters ${Math.round(n.heaterWh)} Wh</small></div>
+      <div class="db-num"><span>In the dark</span><b>${fmtDur(sumH(['night', 'shadow']))}</b><small>longest spell ${longestDark ? fmtDur(longestDark) : 'none'}</small></div>
+      <div class="db-num"><span>No Earth contact</span><b>${fmtDur(sumH(['comms']))}</b><small>in contact ${Math.round(n.commsFrac * 100)}% of the time</small></div>
+      <div class="db-num"><span>Worst wheel slip</span><b>${Math.round(n.maxSlip * 100)}%</b><small>steepest ${route.steepest.slope.toFixed(0)}° on the route</small></div>
     </div>
-    <dl class="facts">
-      <div><dt>Distance driven</dt><dd>${fmtKm(n.distance)} of ${fmtKm(n.routeLength || 0)}</dd></div>
-      <div><dt>Lowest battery</dt><dd>${Math.max(0, Math.round(n.minSoc * 100))}%</dd></div>
-      <div><dt>Longest shadow</dt><dd>${n.longestShadowH ? fmtH(n.longestShadowH) : 'none'}</dd></div>
-      <div><dt>Earth in view</dt><dd>${Math.round(n.commsFrac * 100)}%</dd></div>
-      <div><dt>Ground temperature</dt><dd>${Math.round(coldest)} to ${Math.round(hottest)} °C</dd></div>
-      <div><dt>Peak heater power</dt><dd>${Math.round(maxHeater)} W</dd></div>
-    </dl>
 
-    <h3>How the rover spent its time</h3>
-    <div class="time-bar">${STATE_INFO.filter(([k]) => counts[k]).map(([k, label, c]) => `<i style="flex:${counts[k]};background:${c}" title="${label}: ${Math.round((100 * counts[k]) / tl.length)}%"></i>`).join('')}</div>
-    <ul class="time-list">${STATE_INFO.filter(([k]) => counts[k]).map(([k, label, c]) => `<li><i style="background:${c}"></i>${label}<b>${Math.round((100 * counts[k]) / tl.length)}%</b></li>`).join('')}</ul>
-    ${Object.keys(waits).length ? `<p class="hint">Stopped because of: ${Object.entries(waits).sort((a, b) => b[1] - a[1]).map(([w, c]) => `${w} (${fmtH((c * n.stepMin) / 60)})`).join(', ')}.</p>` : ''}
+    <div class="db-cols">
+      <section class="db-sec">
+        <h3>Hurdles encountered <small>${hurdles.length} in the planned run</small></h3>
+        <ol class="hurdles">${hurdles.slice(0, 40).map((h, i) => {
+          const [ico, title, level] = typeOf(h.type);
+          const durH = (h.t1 - h.t0) / HOUR;
+          return `<li class="hurdle ${h.fatal ? 'critical' : level}"><span class="h-ico">${ico}</span><div>
+            <h4>${title}${durH >= 1 ? ` · ${fmtDur(durH)}` : ''}</h4>
+            <span class="h-when">${dayStamp(h.t0, t0)} · km ${(h.d / 1000).toFixed(2)} · ${fmtLL(h)}</span>
+            <p>${describeHurdle(h, res)}</p>
+            <div class="h-tags">${Number.isFinite(h.minTempC) ? `<span class="${h.minTempC < -100 ? 'cold' : h.maxTempC > 60 ? 'hot' : ''}">ground ${Math.round(h.minTempC)}${Math.round(h.maxTempC) !== Math.round(h.minTempC) ? ` to ${Math.round(h.maxTempC)}` : ''} °C</span>` : ''}<span>battery ${Math.round(h.minSoc * 100)}%</span>${h.heaterWh > 1 ? `<span>heaters ${Math.round(h.heaterWh)} Wh</span>` : ''}</div>
+          </div><button class="btn" type="button" data-watch="${i}">Watch</button></li>`;
+        }).join('') || '<li class="hurdle ok"><span class="h-ico">✓</span><div><h4>No hurdles</h4><p>The rover met no shadow, steep ground or loss of contact worth noting.</p></div></li>'}</ol>
+        ${hurdles.length > 40 ? `<p class="hint">and ${hurdles.length - 40} more in the downloadable report.</p>` : ''}
+      </section>
 
-    <h3>How to improve the odds</h3>
-    <div id="improve" class="improve"><p class="hint">Trying other landing dates and options…</p></div>
+      <div class="db-side" style="display:flex;flex-direction:column;gap:18px;min-width:0">
+        <section class="db-sec db-chart">
+          <h3>Mission timeline</h3>
+          <canvas id="dbChart" aria-label="Battery, ground temperature, sunlight, Earth contact and rover activity over the mission"></canvas>
+          <div class="legend">
+            <span><i style="background:var(--ok)"></i>Battery</span><span><i style="background:var(--hot)"></i>Ground temperature</span>
+            <span><i style="background:var(--sun)"></i>Sunlight</span><span><i style="background:var(--earth)"></i>Earth in view</span>
+          </div>
+          <div class="legend">${Object.entries(STATE_INFO).filter(([k]) => counts[k]).map(([k, [label, c]]) => `<span><i style="background:var(${c})"></i>${label} ${Math.round((100 * counts[k]) / tl.length)}%</span>`).join('')}</div>
+        </section>
 
-    <h3>Mission log (as planned)</h3>
-    <ol class="log">${n.events.slice(0, 40).map((e) => `<li class="${e.level}"><span class="mono">${dayStamp(e.t.getTime(), t0)}</span>${esc(e.text)}</li>`).join('') || '<li>No notable events.</li>'}</ol>
+        <section class="db-sec">
+          <h3>All ${mc.runs} variations</h3>
+          <div class="outcomes">${[['ok', mc.successes], ...causes.map(([k, l]) => [k, l.length])].filter(([, c]) => c).map(([k, c]) => `<i style="flex:${c};background:var(${outcomeCols[k] ?? '--crit'})" title="${k === 'ok' ? 'Succeeded' : CAUSE[k] ?? k}: ${c}"></i>`).join('')}</div>
+          <ul class="cause-list">
+            <li><b class="pct" style="color:var(--ok)">${Math.round(mc.rate * 100)}%</b><span>succeeded</span></li>
+            ${causes.map(([k, list]) => `<li><b class="pct">${Math.round((100 * list.length) / mc.runs)}%</b><span><b>${CAUSE[k] ?? k}</b><br><span class="hint">e.g. ${esc(list[0].text)}</span></span></li>`).join('')}
+          </ul>
+        </section>
 
-    <div class="report-actions">
-      <button class="ghost" type="button" id="toStand">See the sky from the rover</button>
-      <button class="ghost" type="button" id="toCompare">Add to compare</button>
-      <button class="ghost" type="button" id="toPlan">Change the plan</button>
+        <section class="db-sec">
+          <h3>How to improve the odds</h3>
+          <div id="tips"><p class="hint">Testing other landing dates and options…</p></div>
+        </section>
+
+        <section class="db-sec">
+          <h3>Site conditions</h3>
+          <dl class="env-list">
+            <div><dt>Ground temperature</dt><dd>${Math.round(n.minTempC)} to ${Math.round(n.maxTempC)} °C</dd></div>
+            <div><dt>Sunlit</dt><dd>${Math.round(n.sunFrac * 100)}% of the mission</dd></div>
+            <div><dt>Terrain data</dt><dd>NASA LOLA ${route.coarsest <= 100 ? '80 m' : '~950 m'}</dd></div>
+            <div><dt>Height range on route</dt><dd>${Math.round(Math.max(...hs) - Math.min(...hs))} m</dd></div>
+          </dl>
+        </section>
+      </div>
     </div>
-    <p class="hint method">Model: rover position every ${n.stepMin} min on NASA LOLA terrain (80 m near the south pole, ~950 m elsewhere); Sun and Earth from astronomy-engine with the real skyline in their direction; ground temperature from radiative balance on the local slope (cooling to ~95 K in shadow); solar power from panel angle and the share of the Sun's disc above the skyline; heaters run in shadow. The rover follows simple operating rules: it waits for sunlight ahead unless the battery can carry it through a shadow, backs out of shadow to the nearest sunlight, and hibernates in the dark.</p>`;
+    <p class="method">How it works: every ${n.stepMin} minutes of mission time, the rover's position on NASA LOLA terrain is checked against the real Sun and Earth (astronomy-engine), with the true skyline traced over the terrain out to 150 km. Ground temperature comes from radiative balance on the local slope, falling to about −178 °C in shadow. Solar power depends on the panel angle and how much of the Sun's disc clears the skyline. Heaters run in the dark, wheel slip rises with slope, and the rover follows simple rules: wait for sunlight ahead unless the battery can carry it across the shadow, back out of shadow to the nearest sunlight, hibernate in the dark. Rover presets are illustrative.</p>`;
 
-  drawChart();
-  $('simChart').addEventListener('click', (e) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const f = (e.clientX - rect.left - CH.left) / (rect.width - CH.left - CH.right);
-    replay.t = Math.max(0, Math.min(1, f)) * replay.duration();
-    setStage('replay');
-  });
-  $('toReplay').addEventListener('click', () => { replay.t = 0; setStage('replay'); });
-  $('toStand').addEventListener('click', () => openStand());
-  $('toCompare').addEventListener('click', () => addCompare(state.result));
-  $('toPlan').addEventListener('click', () => setStage('plan'));
+  requestAnimationFrame(() => drawChart($('dbChart'), res));
+  $('dbReplay').addEventListener('click', () => { replay.t = 0; replay.ended = false; setMode('run'); });
+  $('dbPlan').addEventListener('click', () => setMode('plan'));
+  $('dbDownload').addEventListener('click', () => downloadReport(res));
+  $('debriefBody').querySelectorAll('[data-watch]').forEach((b) => b.addEventListener('click', () => {
+    const h = hurdles[+b.dataset.watch];
+    replay.ended = false;
+    setMode('run');
+    seek(h.t0 - t0 - 2 * HOUR);
+    setPlaying(true);
+  }));
+  renderTips(res);
 }
 
-const CH = { left: 46, right: 44, top: 10 };
-function drawChart(canvas = $('simChart'), result = state.result, { compact = false, cursor = null } = {}) {
+function drawChart(canvas, result) {
   if (!canvas || !result) return;
   const tl = result.nominal.timeline;
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -461,344 +955,127 @@ function drawChart(canvas = $('simChart'), result = state.result, { compact = fa
   canvas.width = W * dpr; canvas.height = H * dpr;
   const ctx = canvas.getContext('2d');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  const L = compact ? 0 : CH.left, R = compact ? 0 : CH.right;
-  const w = W - L - R, n = Math.max(2, result.nominal.days * 24 * 60 / result.nominal.stepMin + 1);
+  const L = 40, R = 46, top = 8;
+  const w = W - L - R, n = Math.max(2, (result.nominal.days * 24 * 60) / result.nominal.stepMin + 1);
   const x = (i) => L + (i / (n - 1)) * w;
-  const lineTop = compact ? 2 : CH.top, lineH = compact ? H - 16 : H - 78;
-  const bandY = lineTop + lineH + (compact ? 2 : 10), bandH = compact ? 4 : 12;
-  ctx.clearRect(0, 0, W, H);
+  const lineH = H - 72, bandY = top + lineH + 8, bandH = 10;
   ctx.strokeStyle = cssVar('--line');
-  ctx.lineWidth = 1;
-  for (const f of [0, 0.5, 1]) { ctx.beginPath(); ctx.moveTo(L, lineTop + lineH * f); ctx.lineTo(L + w, lineTop + lineH * f); ctx.stroke(); }
-  // Battery (0-100%) on the left axis, ground temperature (-200..+130 C) on the right.
-  const yB = (v) => lineTop + lineH * (1 - v);
-  const yT = (c) => lineTop + lineH * (1 - (c + 200) / 330);
+  for (const f of [0, 0.5, 1]) { ctx.beginPath(); ctx.moveTo(L, top + lineH * f); ctx.lineTo(L + w, top + lineH * f); ctx.stroke(); }
+  const yB = (v) => top + lineH * (1 - v);
+  const yT = (c) => top + lineH * (1 - (c + 200) / 330);
   const path = (get, color, width, fill) => {
     ctx.beginPath();
     tl.forEach((r, i) => (i ? ctx.lineTo(x(i), get(r)) : ctx.moveTo(x(i), get(r))));
     ctx.strokeStyle = color; ctx.lineWidth = width; ctx.stroke();
-    if (fill) { ctx.lineTo(x(tl.length - 1), lineTop + lineH); ctx.lineTo(x(0), lineTop + lineH); ctx.closePath(); ctx.fillStyle = fill; ctx.fill(); }
+    if (fill) { ctx.lineTo(x(tl.length - 1), top + lineH); ctx.lineTo(x(0), top + lineH); ctx.closePath(); ctx.fillStyle = fill; ctx.fill(); }
   };
-  path((r) => yT(r.tSurfC), cssVar('--crit'), 1.2);
-  path((r) => yB(r.soc), cssVar('--ok'), 2, 'rgba(111,211,154,0.12)');
-  ctx.fillStyle = cssVar('--shadow');
-  for (let row = 0; row < 3; row++) ctx.fillRect(L, bandY + row * (bandH + 3), w, bandH);
+  path((r) => yT(r.tSurfC), cssVar('--hot'), 1.3);
+  path((r) => yB(r.soc), cssVar('--ok'), 2, 'rgba(95,211,154,0.12)');
+  for (let row = 0; row < 3; row++) { ctx.fillStyle = cssVar('--shadow'); ctx.fillRect(L, bandY + row * (bandH + 3), w, bandH); }
   tl.forEach((r, i) => {
     const xx = x(i), ww = Math.max(1, x(i + 1) - xx + 0.5);
     if (r.sunVis > 0.5) { ctx.fillStyle = cssVar('--sun'); ctx.fillRect(xx, bandY, ww, bandH); }
     if (r.earthVis) { ctx.fillStyle = cssVar('--earth'); ctx.fillRect(xx, bandY + bandH + 3, ww, bandH); }
     ctx.fillStyle = stateColour(r.state); ctx.fillRect(xx, bandY + 2 * (bandH + 3), ww, bandH);
   });
-  if (compact) return;
-  ctx.font = `500 10.5px ${cssVar('--font-mono')}`;
+  ctx.font = `500 10px ${cssVar('--font-mono')}`;
   ctx.textAlign = 'right';
   ctx.fillStyle = cssVar('--ok');
-  ctx.fillText('100%', L - 6, yB(1) + 4); ctx.fillText('50%', L - 6, yB(0.5) + 4); ctx.fillText('0%', L - 6, yB(0) + 4);
-  ctx.fillStyle = cssVar('--crit');
+  ctx.fillText('100%', L - 5, yB(1) + 8); ctx.fillText('0%', L - 5, yB(0));
+  ctx.fillStyle = cssVar('--hot');
   ctx.textAlign = 'left';
-  ctx.fillText('+130°C', L + w + 4, yT(130) + 9); ctx.fillText('0°C', L + w + 4, yT(0) + 4); ctx.fillText('−200°C', L + w + 4, yT(-200) - 2);
+  ctx.fillText('+130°C', L + w + 4, yT(130) + 8); ctx.fillText('0°C', L + w + 4, yT(0) + 4); ctx.fillText('−200°C', L + w + 4, yT(-200));
   ctx.fillStyle = cssVar('--ink-dim');
   ctx.textAlign = 'right';
-  ['SUN', 'EARTH', 'ROVER'].forEach((t, row) => ctx.fillText(t, L - 6, bandY + row * (bandH + 3) + 10));
+  ['SUN', 'EARTH', 'ROVER'].forEach((t, row) => ctx.fillText(t, L - 5, bandY + row * (bandH + 3) + 9));
   ctx.textAlign = 'center';
   const days = result.nominal.days, every = days > 20 ? 5 : days > 10 ? 2 : 1;
-  for (let d = 0; d <= days; d += every) ctx.fillText(d ? `D${d}` : 'Land', Math.min(L + w - 12, x((d * 24 * 60) / result.nominal.stepMin)), H - 4);
-  if (Number.isFinite(cursor)) { ctx.fillStyle = cssVar('--ink'); ctx.fillRect(x(cursor) - 0.5, lineTop, 1.5, bandY + 3 * (bandH + 3) - lineTop); }
+  for (let d = 0; d <= days; d += every) ctx.fillText(d ? `D${d}` : 'Land', Math.min(L + w - 12, x((d * 24 * 60) / result.nominal.stepMin)), H - 3);
 }
 
-// Try other landing dates, a bigger battery, heaters and a planned route, and report what helps.
+// Try other landing dates, a bigger battery, heaters and a sun-planned route; keep what helps.
 async function findImprovements(res) {
   const tips = [];
   const base = res.args;
-  const rate = res.mc.rate;
   const quick = (args) => monteCarlo(args, { runs: 20, slipDays: res.slip, seed: 11 });
   const screened = [];
   for (const s of [-6, -4, -2, 2, 4, 6, 8, 10, 12, 14]) {
     const start = new Date(base.start.getTime() + s * DAY);
     const r = simulate({ ...base, start, record: false });
     screened.push({ s, start, ok: r.success, d: r.distance });
-    await new Promise((x) => setTimeout(x, 0));
+    await tick();
     if (state.result !== res) return;
   }
   screened.sort((a, b) => (b.ok - a.ok) || (b.d - a.d) || (Math.abs(a.s) - Math.abs(b.s)));
-  let bestDate = null;
+  let best = null;
   for (const c of screened.slice(0, 2)) {
     const mc = await quick({ ...base, start: c.start });
     if (state.result !== res) return;
-    if (!bestDate || mc.rate > bestDate.rate) bestDate = { ...c, rate: mc.rate, of: mc.runs, ok: mc.successes };
+    if (!best || mc.rate > best.rate) best = { ...c, rate: mc.rate, of: mc.runs, ok: mc.successes };
   }
-  if (bestDate && bestDate.rate > rate + 0.05) {
-    tips.push({ text: `Land on <b>${fmtDate(bestDate.start)}</b> (${bestDate.s > 0 ? `${bestDate.s} days later` : `${-bestDate.s} days earlier`}): ${bestDate.ok} of ${bestDate.of} runs succeed.`, act: 'Use this date', run: () => { state.start = bestDate.start; syncTiming(); setTime(state.start); runSimulation(); } });
+  if (best && best.rate > res.mc.rate + 0.05) {
+    tips.push({ text: `Land on <b>${fmtDate(best.start)}</b> (${best.s > 0 ? `${best.s} days later` : `${-best.s} days earlier`}): ${best.ok} of ${best.of} runs succeed.`, act: 'Use this date', run: () => { state.start = best.start; syncTiming(); launch(); } });
   }
   if (res.mc.causes.battery?.length) {
     const mc = await quick({ ...base, rover: { ...base.rover, batteryWh: base.rover.batteryWh * 1.5 } });
     if (state.result !== res) return;
-    tips.push({ text: `A <b>50% bigger battery</b> (${Math.round(base.rover.batteryWh * 1.5)} Wh): ${mc.successes} of ${mc.runs} runs succeed.`, act: 'Use it', run: () => { state.rover.batteryWh = Math.round(base.rover.batteryWh * 1.5); makeCustom(); syncRoverForm(); runSimulation(); } });
+    tips.push({ text: `A <b>50% bigger battery</b> (${Math.round(base.rover.batteryWh * 1.5)} Wh): ${mc.successes} of ${mc.runs} runs succeed.`, act: 'Use it', run: () => { state.rover.batteryWh = Math.round(base.rover.batteryWh * 1.5); makeCustom(); syncRoverForm(); launch(); } });
     const rhu = Math.round(base.rover.heatWperK * 60);
     const mc2 = await quick({ ...base, rover: { ...base.rover, rhuW: (base.rover.rhuW ?? 0) + rhu } });
     if (state.result !== res) return;
-    tips.push({ text: `<b>Radioisotope heaters</b> worth ${rhu} W to keep warm in shadow: ${mc2.successes} of ${mc2.runs} runs succeed.`, act: 'Add them', run: () => { state.rover.rhuW = (state.rover.rhuW ?? 0) + rhu; makeCustom(); syncRoverForm(); runSimulation(); } });
+    tips.push({ text: `<b>Radioisotope heaters</b> worth ${rhu} W to stay warm in the dark: ${mc2.successes} of ${mc2.runs} runs succeed.`, act: 'Add them', run: () => { state.rover.rhuW = (state.rover.rhuW ?? 0) + rhu; makeCustom(); syncRoverForm(); launch(); } });
   }
-  if (!res.planned && res.waypoints.length > 1 && rate < 0.95) {
-    tips.push({ text: 'Let the planner find a route that <b>stays in sunlight</b> and avoids steep slopes, then simulate again.', act: 'Find route', run: async () => { setStage('plan'); await planSunniest(); runSimulation(); } });
+  if (!res.planned && res.waypoints.length > 1 && res.mc.rate < 0.95) {
+    tips.push({ text: 'Let the planner re-route between your points to <b>stay in sunlight</b> and avoid steep slopes.', act: 'Re-route', run: async () => { setMode('plan'); await planSunniest(); launch(); } });
   }
-  if (res.mc.causes.time?.length) tips.push({ text: `Some runs ran out of time. A <b>longer mission</b> (${res.nominal.days + 7} days) gives the rover more time to wait for sunlight.`, act: 'Add 7 days', run: () => { state.days += 7; syncTiming(); runSimulation(); } });
-  const el = $('improve');
-  if (!el || state.result !== res) return;
-  el.innerHTML = tips.length
-    ? `<ul>${tips.map((t, i) => `<li><span>${t.text}</span><button class="ghost" type="button" data-tip="${i}">${t.act}</button></li>`).join('')}</ul>`
-    : '<p class="hint">Nothing we tried improved the odds noticeably. This plan is as good as these options get.</p>';
-  el.querySelectorAll('[data-tip]').forEach((b) => b.addEventListener('click', () => tips[+b.dataset.tip].run()));
+  if (res.mc.causes.time?.length) tips.push({ text: `Some runs ran out of time. A <b>longer mission</b> (${res.nominal.days + 7} days) gives the rover time to wait out shadows.`, act: 'Add 7 days', run: () => { state.days += 7; syncTiming(); launch(); } });
+  res.tips = tips;
+  renderTips(res);
 }
 
-// ---------- replay: the rover drives the mission on the Moon ----------
-const replay = {
-  t: 0, // ms since landing
-  playing: false,
-  lastFrame: 0,
-  lastUi: 0,
-  lastTrail: 0,
-  heading: 0,
-  odometer: 0,
-  shownEvents: new Set(),
-  duration() { const n = state.result?.nominal; return n ? (n.timeline.length - 1) * n.stepMin * 60000 : 0; },
-  // Replay rate while driving: all moving steps fit in ~30 s, but never slower than 15 minutes per second.
-  driveSpeed() {
-    const n = state.result?.nominal;
-    if (!n) return HOUR;
-    if (this.driveFor !== n) {
-      this.driveFor = n;
-      let moving = 0;
-      for (let i = 1; i < n.timeline.length; i++) if (Math.abs(n.timeline[i].d - n.timeline[i - 1].d) > 0.5) moving++;
-      this.driveMs = Math.max(HOUR / 4, (moving * n.stepMin * 60000) / 30);
-    }
-    return this.driveMs;
-  },
-};
-
-function startReplay() {
-  if (!state.result) return;
-  const n = state.result.nominal;
-  $('timeline').hidden = false;
-  $('readout').hidden = true;
-  $('hud').hidden = false;
-  replay.shownEvents = new Set(n.events.filter((e) => e.t.getTime() - n.start.getTime() < replay.t).map((e) => e.text));
-  replay.odometer = 0;
-  drawStrip();
-  replayFrame(true);
-  globe.setFollow(true, 5000);
-  $('followBtn').setAttribute('aria-pressed', 'true');
-  $('followBtn').textContent = 'Following rover';
-  setPlaying(true);
+function renderTips(res) {
+  const el = $('tips');
+  if (!el || state.result !== res || !res.tips) return;
+  el.innerHTML = res.tips.length
+    ? `<ul class="tips">${res.tips.map((t, i) => `<li><span>${t.text}</span><button class="btn accent" type="button" data-tip="${i}">${t.act}</button></li>`).join('')}</ul>`
+    : '<p class="hint">Nothing we tried improved the odds noticeably: this plan is as good as these options get.</p>';
+  el.querySelectorAll('[data-tip]').forEach((b) => b.addEventListener('click', () => res.tips[+b.dataset.tip].run()));
 }
 
-function stopReplay() {
-  setPlaying(false);
-  globe.setFollow(false);
-  $('timeline').hidden = !state.result;
-  $('hud').hidden = true;
-  $('caption').hidden = true;
-  $('readout').hidden = !!state.result;
+function downloadReport(res) {
+  const { nominal: n, mc, rover } = res;
+  const t0 = n.start.getTime();
+  const strip = (h) => h.replace(/<[^>]+>/g, '');
+  const lines = [
+    '# LunaView mission debrief', '',
+    `- Rover: ${rover.name} (${rover.massKg} kg, ${rover.solarW} W solar, ${rover.batteryWh} Wh battery, ${rover.maxSlopeDeg}° max slope)`,
+    `- Route: ${res.waypoints.map(fmtLL).join(' → ')} (${fmtKm(n.routeLength)})`,
+    `- Landing: ${fmtDateTime(n.start)} ±${res.slip} days, ${n.days}-day mission`, '',
+    '## Result', '',
+    `- Planned run: ${n.success ? 'SUCCESS' : 'FAILURE'}. ${n.text}`,
+    `- Chance of success: ${Math.round(mc.rate * 100)}% (${mc.successes} of ${mc.runs} variations)`,
+    ...Object.entries(mc.causes).map(([k, l]) => `- Failed (${k}): ${l.length} runs`), '',
+    '## Key numbers', '',
+    `- Driven: ${fmtKm(n.distance)} of ${fmtKm(n.routeLength)}`,
+    `- Ground temperature: ${Math.round(n.minTempC)} to ${Math.round(n.maxTempC)} °C`,
+    `- Lowest battery: ${Math.round(n.minSoc * 100)}%`,
+    `- Energy generated ${(n.energyIn / 1000).toFixed(1)} kWh, used ${(n.energyOut / 1000).toFixed(1)} kWh, heaters ${Math.round(n.heaterWh)} Wh`,
+    `- Earth in view ${Math.round(n.commsFrac * 100)}% of the time; sunlit ${Math.round(n.sunFrac * 100)}%`,
+    `- Worst wheel slip ${Math.round(n.maxSlip * 100)}%`, '',
+    '## Hurdles', '',
+    ...debriefHurdles(n).map((h) => `- **${typeOf(h.type)[1]}**, ${dayStamp(h.t0, t0)}, km ${(h.d / 1000).toFixed(2)}${(h.t1 - h.t0) >= HOUR ? `, ${fmtDur((h.t1 - h.t0) / HOUR)}` : ''}: ${strip(describeHurdle(h, res))}`), '',
+    '## Mission log', '',
+    ...n.events.map((e) => `- ${dayStamp(e.t.getTime(), t0)}: ${e.text}`),
+  ];
+  const blob = new Blob([lines.join('\n')], { type: 'text/markdown' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `lunaview-debrief-${fmtDate(n.start)}.md`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
 }
 
-function setPlaying(on) {
-  replay.playing = on;
-  replay.lastFrame = performance.now();
-  $('pbPlay').textContent = on ? '❚❚' : '▶';
-  $('pbPlay').setAttribute('aria-label', on ? 'Pause' : 'Play the mission');
-  if (on && replay.t >= replay.duration()) replay.t = 0;
-}
-$('pbPlay').addEventListener('click', () => { if (state.stage !== 'replay') setStage('replay'); else setPlaying(!replay.playing); });
-$('followBtn').addEventListener('click', () => {
-  const on = !globe.follow;
-  globe.setFollow(on, 5000);
-  $('followBtn').setAttribute('aria-pressed', String(on));
-  $('followBtn').textContent = on ? 'Following rover' : 'Free camera';
-});
-
-// State of the mission at replay time t, interpolated between the 15-minute steps.
-function replayState(t) {
-  const n = state.result.nominal, tl = n.timeline, stepMs = n.stepMin * 60000;
-  const f = Math.max(0, Math.min(tl.length - 1, t / stepMs));
-  const i = Math.min(tl.length - 2, Math.floor(f)), k = tl.length > 1 ? f - i : 0;
-  const a = tl[Math.max(0, i)], b = tl[Math.min(tl.length - 1, i + 1)];
-  const d = a.d + (b.d - a.d) * k;
-  return { a, b, k, d, i, f, t: n.start.getTime() + t };
-}
-
-function replayFrame(force) {
-  const res = state.result;
-  if (!res) return;
-  const now = performance.now();
-  if (replay.playing) {
-    let speed = parseFloat($('pbSpeed').value) * HOUR; // mission ms per real second
-    // Slow down while the rover is moving so the drive itself takes about half a minute to watch.
-    const cur = replayState(replay.t);
-    replay.slowed = Math.abs(cur.b.d - cur.a.d) > 0.5 && replay.driveSpeed() < speed;
-    if (replay.slowed) speed = replay.driveSpeed();
-    replay.t = Math.min(replay.duration(), replay.t + ((now - replay.lastFrame) / 1000) * speed);
-    if (replay.t >= replay.duration()) setPlaying(false);
-  }
-  else replay.slowed = false;
-  replay.lastFrame = now;
-  const s = replayState(replay.t);
-  const route = res.args.route;
-  const here = pointAt(route, s.d);
-  // Face the direction of travel; keep the last heading while stopped.
-  const moving = s.b.d - s.a.d;
-  if (Math.abs(moving) > 0.5) {
-    const ahead = pointAt(route, s.d + Math.sign(moving) * 20);
-    if (distance(here, ahead) > 1) replay.heading = bearing(here, ahead);
-  }
-  const prevOdo = replay.odometer;
-  replay.odometer = s.d;
-  const lerpAng = (x, y, k) => x + ((((y - x) % 360) + 540) % 360 - 180) * k;
-  const live = s.k < 0.5 ? s.a : s.b;
-  globe.setRover({
-    lat: here.lat, lon: here.lon, h: here.h, heading: replay.heading,
-    sunAz: lerpAng(s.a.sunAz, s.b.sunAz, s.k), colour: stateColour(live.state),
-    odometer: prevOdo === s.d ? undefined : s.d,
-  });
-  // Sun and Earth move smoothly with the replay clock.
-  if (now - replay.lastUi > 90 || force) {
-    replay.lastUi = now;
-    setTime(new Date(s.t), bodyVectors(new Date(s.t)));
-    updateHud(s, live);
-    drawStrip(s.f);
-    showEvents(s);
-  }
-  if (now - replay.lastTrail > 300 || force) {
-    replay.lastTrail = now;
-    // The trail covers the stretch of route driven so far (the rover can back up, so use the furthest point).
-    let maxD = 0;
-    for (let j = 0; j <= s.i + 1 && j < res.nominal.timeline.length; j++) maxD = Math.max(maxD, res.nominal.timeline[j].d);
-    maxD = Math.min(maxD, Math.max(s.d, maxD));
-    const pts = route.pts.filter((p) => p.d <= maxD).map((p) => ({ lat: p.lat, lon: p.lon, h: p.h }));
-    pts.push({ lat: here.lat, lon: here.lon, h: here.h });
-    globe.setTrail(pts.length > 1 ? pts : null);
-  }
-}
-
-function updateHud(s, live) {
-  const n = state.result.nominal;
-  const soc = s.a.soc + (s.b.soc - s.a.soc) * s.k;
-  const t = new Date(s.t);
-  $('hudDay').textContent = `Day ${Math.floor((s.t - n.start.getTime()) / DAY) + 1}`;
-  $('hudClock').textContent = `${fmtDate(t)} ${pad(t.getUTCHours())}:${pad(t.getUTCMinutes())} UTC`;
-  $('hudState').textContent = (n.states[live.state] ?? live.state) + (live.why ? ` · ${live.why}` : '');
-  $('hudState').style.color = stateColour(live.state);
-  $('hudBatt').style.width = `${Math.round(soc * 100)}%`;
-  $('hudBatt').style.background = soc < 0.2 ? cssVar('--crit') : soc < 0.4 ? cssVar('--warn') : cssVar('--ok');
-  $('hudBattTxt').textContent = `${Math.round(soc * 100)}%`;
-  $('hudTemp').textContent = `${Math.round(live.tSurfC)} °C`;
-  $('hudDist').textContent = `${(s.d / 1000).toFixed(2)} km`;
-  $('hudSun').textContent = live.sunVis > 0.5 ? 'Shining' : live.sunEl < 0 ? 'Below horizon' : 'Behind terrain';
-  $('hudEarth').textContent = live.earthVis ? 'In view' : 'Hidden';
-  $('hudGen').textContent = `${Math.round(live.gen)} W`;
-  $('hudLoad').textContent = `${Math.round(live.load)} W`;
-  const x = globe.roverScale ?? 1;
-  $('hudScale').textContent = x > 1.5 ? `Rover drawn ${Math.round(x)}× life size so you can see it. Zoom in to see it at true size.` : 'Rover at true size.';
-  $('pbText').textContent = `${dayStamp(s.t, n.start.getTime())} · ${(s.d / 1000).toFixed(2)} km${replay.slowed ? ' · slowed to watch the drive' : ''}`;
-}
-
-function showEvents(s) {
-  const n = state.result.nominal;
-  for (const e of n.events) {
-    if (e.t.getTime() <= s.t && !replay.shownEvents.has(e.text)) {
-      replay.shownEvents.add(e.text);
-      if (s.t - e.t.getTime() < 12 * HOUR) {
-        const c = $('caption');
-        c.className = `caption ${e.level}`;
-        c.innerHTML = `<span class="mono">${dayStamp(e.t.getTime(), n.start.getTime())}</span>${esc(e.text)}`;
-        c.hidden = false;
-        clearTimeout(showEvents.timer);
-        showEvents.timer = setTimeout(() => { c.hidden = true; }, 4500);
-        if (e.level === 'critical' || e.level === 'ok') setPlaying(false);
-      }
-    }
-  }
-}
-
-// Timeline strip: rover activity colours, event marks and the playhead.
-function drawStrip(cursor) {
-  const c = $('pbStrip');
-  const res = state.result;
-  if (!c || !res) return;
-  const dpr = Math.min(window.devicePixelRatio || 1, 2), W = c.clientWidth, H = c.clientHeight;
-  if (!W || !H) return;
-  if (c.width !== Math.round(W * dpr)) { c.width = Math.round(W * dpr); c.height = Math.round(H * dpr); }
-  const ctx = c.getContext('2d');
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  const tl = res.nominal.timeline, n = tl.length;
-  ctx.clearRect(0, 0, W, H);
-  ctx.fillStyle = cssVar('--shadow');
-  ctx.fillRect(0, 6, W, H - 12);
-  tl.forEach((r, i) => {
-    ctx.fillStyle = stateColour(r.state);
-    ctx.fillRect((i / n) * W, 6 + (H - 12) / 2, Math.max(1, W / n + 0.5), (H - 12) / 2);
-    if (r.sunVis > 0.5) { ctx.fillStyle = cssVar('--sun'); ctx.globalAlpha = 0.55; ctx.fillRect((i / n) * W, 6, Math.max(1, W / n + 0.5), (H - 12) / 2); ctx.globalAlpha = 1; }
-  });
-  const t0 = res.nominal.start.getTime(), stepMs = res.nominal.stepMin * 60000;
-  for (const e of res.nominal.events) {
-    if (e.level === 'info') continue;
-    const xx = ((e.t.getTime() - t0) / stepMs / n) * W;
-    ctx.fillStyle = e.level === 'critical' ? cssVar('--crit') : e.level === 'ok' ? cssVar('--ok') : cssVar('--warn');
-    ctx.fillRect(xx - 1, 0, 2, H);
-  }
-  const f = cursor ?? replay.t / stepMs;
-  ctx.fillStyle = cssVar('--ink');
-  ctx.fillRect((f / n) * W - 1, 0, 3, H);
-}
-function scrubTo(e) {
-  const r = $('pbStrip').getBoundingClientRect();
-  replay.t = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * replay.duration();
-  replay.shownEvents = new Set(state.result.nominal.events.filter((ev) => ev.t.getTime() - state.result.nominal.start.getTime() < replay.t).map((ev) => ev.text));
-  if (state.stage !== 'replay') setStage('replay');
-  replayFrame(true);
-}
-let scrubbing = false;
-$('pbStrip').addEventListener('pointerdown', (e) => { scrubbing = true; e.currentTarget.setPointerCapture(e.pointerId); setPlaying(false); scrubTo(e); });
-$('pbStrip').addEventListener('pointermove', (e) => { if (scrubbing) scrubTo(e); });
-$('pbStrip').addEventListener('pointerup', () => { scrubbing = false; });
-
-// ---------- readout (plan stage) ----------
-function updateReadout() {
-  if (!terrain || !state.waypoints.length || state.stage === 'replay') return;
-  const w = state.waypoints[0];
-  const env = environment(terrain, ephemeris(15 * 60 * 1000), w.lat, w.lon, terrain.height(w.lat, w.lon), state.time.getTime());
-  $('roSun').textContent = env.sunVis > 0.5 ? `Sun ${(env.sun.el - env.sunHz).toFixed(1)}° over the skyline` : env.sun.el < 0 ? 'Night at the landing site' : 'Landing site in shadow';
-  $('roEarth').textContent = `Earth ${env.earthVis ? 'in view' : 'hidden'}`;
-}
-
-// ---------- panels ----------
-const panels = ['setup', 'report', 'stand', 'compare'];
-function openPanel(id) {
-  $(id).hidden = false;
-  if (id === 'setup') $('menuBtn').setAttribute('aria-expanded', 'true');
-  document.body.classList.toggle('report-open', !$('report').hidden);
-  document.body.classList.toggle('setup-open', !$('setup').hidden);
-  if (id === 'report') requestAnimationFrame(() => drawChart());
-}
-function closePanel(id) {
-  $(id).hidden = true;
-  if (id === 'setup') $('menuBtn').setAttribute('aria-expanded', 'false');
-  if (id === 'stand') stopStandPlay();
-  document.body.classList.toggle('report-open', !$('report').hidden);
-  document.body.classList.toggle('setup-open', !$('setup').hidden);
-}
-document.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', () => closePanel(b.dataset.close)));
-document.addEventListener('keydown', (e) => {
-  if (e.key === ' ' && state.stage === 'replay' && e.target === document.body) { e.preventDefault(); setPlaying(!replay.playing); return; }
-  if (e.key !== 'Escape') return;
-  if (state.pick) { setPick(null); return; }
-  const top = [...panels].reverse().find((p) => !$(p).hidden);
-  if (top) closePanel(top);
-  $('timePanel').hidden = true;
-});
-$('menuBtn').addEventListener('click', () => { if (state.stage !== 'plan') setStage('plan'); else ($('setup').hidden ? openPanel('setup') : closePanel('setup')); });
-$('siteChip').addEventListener('click', () => setStage('plan'));
-
-// ---------- search: land anywhere ----------
+// ============ search ============
 const search = $('search');
 const results = $('results');
 let active = 0;
@@ -806,10 +1083,10 @@ function renderResults() {
   const q = search.value.trim().toLowerCase();
   const items = [];
   const c = parseCoords(search.value);
-  if (c) items.push({ id: null, name: `Land at ${fmtLL(c)}`, lat: c.lat, lon: c.lon });
+  if (c) items.push({ id: null, name: `Go to ${fmtLL(c)}`, lat: c.lat, lon: c.lon });
   for (const s of ALL_PLACES) if (!q || s.name.toLowerCase().includes(q)) items.push(s);
   results.textContent = '';
-  items.slice(0, 12).forEach((s, i) => {
+  items.slice(0, 14).forEach((s, i) => {
     const li = document.createElement('li');
     li.setAttribute('role', 'option');
     li.setAttribute('aria-selected', String(i === active));
@@ -826,9 +1103,9 @@ function choose(s) {
   search.value = '';
   results.hidden = true;
   search.blur();
-  if (state.stage !== 'plan') setStage('plan');
-  setLanding(s, s.id ? s.name : `Landing at ${fmtLL(s)}`);
-  toast(`Landing set: ${s.id ? s.name : fmtLL(s)}. Add route points, then simulate.`);
+  if (state.mode !== 'plan') setMode('plan');
+  if (!state.waypoints.length) setLanding(s, s.id ? s.name : `Landing at ${fmtLL(s)}`);
+  else { globe.flyToPoint(s.lat, s.lon); toast(`Showing ${s.id ? s.name : fmtLL(s)}. Click the ground to add waypoints, or "New landing site" to start here.`); }
 }
 search.addEventListener('focus', () => { active = 0; renderResults(); });
 search.addEventListener('input', () => { active = 0; renderResults(); });
@@ -841,152 +1118,70 @@ search.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') search.blur();
 });
 
-// ---------- sky from the rover ----------
+// ============ sky from the rover ============
 const pano = new Panorama($('pano'));
-let standTimer = null;
-function roverNow() {
-  if (state.result) {
-    const s = replayState(replay.t);
-    const p = pointAt(state.result.args.route, s.d);
-    return { p, i: Math.round(s.f) };
-  }
-  const w = state.waypoints[0];
-  return { p: { ...w, h: terrain.height(w.lat, w.lon) }, i: 0 };
-}
 function openStand() {
-  if (!terrain || !state.waypoints.length) { toast('Choose a landing place first.'); return; }
-  const { p, i } = roverNow();
+  if (!terrain || !state.result) return;
+  setPlaying(false);
+  const s = replayState(replay.t);
+  const p = pointAt(state.result.args.route, s.d);
   const horizon = [];
   for (let az = 0; az < 360; az += 1) horizon.push(terrain.horizon(p.lat, p.lon, az, p.h + 1.5));
-  openPanel('stand');
-  $('standSite').textContent = `Rover at ${fmtLL(p)} · skyline from NASA LOLA terrain · vertical scale ×${pano.vScale}`;
-  $('standNote').textContent = state.result ? 'The slider follows the simulated mission.' : 'Simulate the mission to follow the rover through it.';
-  const tl = state.result?.nominal.timeline;
-  pano.set({ horizon, track: tl ? tl.filter((_, k) => k % 4 === 0).map((q) => ({ sunAz: q.sunAz, sunEl: q.sunEl, earthAz: q.earthAz, earthEl: q.earthEl })) : [] });
-  $('standSlider').max = tl ? tl.length - 1 : 0;
-  setStandIdx(i, p);
-  pano.lookAt(pano.state?.sun.az ?? 180);
-}
-function setStandIdx(i, fixed) {
-  const tl = state.result?.nominal.timeline;
-  const r = tl ? tl[i] : null;
-  const t = r ? r.t : state.time.getTime();
-  const p = r ? { lat: r.lat, lon: r.lon, h: r.h } : fixed;
+  $('stand').hidden = false;
+  $('standSite').textContent = `${dayStamp(s.t, state.result.nominal.start.getTime())} · rover at ${fmtLL(p)} · skyline from NASA LOLA terrain, heights ×${pano.vScale}`;
+  const tl = state.result.nominal.timeline;
+  pano.set({ horizon, track: tl.filter((_, k) => k % 4 === 0).map((q) => ({ sunAz: q.sunAz, sunEl: q.sunEl, earthAz: q.earthAz, earthEl: q.earthEl })) });
   const eph = ephemeris(15 * 60 * 1000);
-  const env = environment(terrain, eph, p.lat, p.lon, p.h, t);
-  const v = eph(t);
+  const env = environment(terrain, eph, p.lat, p.lon, p.h, s.t);
+  const v = eph(s.t);
   const lit = (1 + (v.sun.x * v.earth.x + v.sun.y * v.earth.y + v.sun.z * v.earth.z)) / 2;
   pano.set({ state: { sun: env.sun, earth: env.earth, sunlit: env.sunVis > 0.5, earthVisible: env.earthVis, earthLit: lit } });
-  $('standSlider').value = i;
-  $('standTime').textContent = r ? dayStamp(t, state.result.nominal.start.getTime()) : fmtDateTime(new Date(t));
-  $('standReadout').innerHTML = `<span class="sun-dot"></span>Sun ${env.sun.el.toFixed(2)}° at az ${env.sun.az.toFixed(0)}° · ${env.sunVis > 0.5 ? 'above skyline' : 'behind skyline'}
-    <span class="earth-dot"></span>Earth ${env.earth.el.toFixed(2)}° · ${env.earthVis ? 'in view' : 'hidden'} · ground ${Math.round(env.teq - 273.15)} °C`;
-  if (r) { replay.t = i * state.result.nominal.stepMin * 60000; }
+  $('standReadout').innerHTML = `<span class="sun-dot"></span>Sun ${env.sun.el.toFixed(2)}° · ${env.sunVis > 0.5 ? 'above the skyline' : 'behind the skyline'}
+    <span class="earth-dot"></span>Earth ${env.earth.el.toFixed(2)}° · ${env.earthVis ? 'in view' : 'hidden'}`;
+  pano.lookAt(env.sun.az);
 }
-$('standSlider').addEventListener('input', (e) => setStandIdx(+e.target.value));
-function stopStandPlay() { clearInterval(standTimer); standTimer = null; $('standPlay').textContent = '▶'; }
-$('standPlay').addEventListener('click', () => {
-  if (standTimer) return stopStandPlay();
-  if (!state.result) return;
-  $('standPlay').textContent = '❚❚';
-  standTimer = setInterval(() => {
-    const max = state.result.nominal.timeline.length - 1;
-    const i = +$('standSlider').value;
-    setStandIdx(i >= max ? 0 : i + 2);
-  }, 80);
-});
+$('closeStand').addEventListener('click', () => { $('stand').hidden = true; });
 $('lookSun').addEventListener('click', () => pano.lookAt(pano.state.sun.az));
 $('lookEarth').addEventListener('click', () => pano.lookAt(pano.state.earth.az));
 
-// ---------- compare ----------
-function addCompare(res) {
-  if (state.saved.includes(res)) { toast('This forecast is already in compare.'); openCompare(); return; }
-  state.saved.push(res);
-  if (state.saved.length > 3) state.saved.shift();
-  $('cmpCount').textContent = state.saved.length;
-  openCompare();
-}
-function openCompare() {
-  openPanel('compare');
-  const grid = $('cmpGrid');
-  grid.textContent = '';
-  if (!state.saved.length) {
-    grid.innerHTML = '<p class="cmp-empty">Simulate a mission and choose <b>Add to compare</b>. You can line up to three rovers, routes or dates side by side.</p>';
-    return;
-  }
-  const best = Math.max(...state.saved.map((s) => s.mc.rate));
-  state.saved.forEach((res, i) => {
-    const [word, colour] = verdict(res.mc.rate);
-    const card = document.createElement('article');
-    card.className = `cmp-card${res.mc.rate === best && state.saved.length > 1 ? ' best' : ''}`;
-    card.innerHTML = `
-      <header><div><strong></strong><div class="chip-sub"></div></div><div class="big" style="color:${colour}">${Math.round(res.mc.rate * 100)}%</div></header>
-      <p class="hint">${word}: ${res.mc.successes} of ${res.mc.runs} runs succeeded</p>
-      <canvas></canvas>
-      <dl class="facts">
-        <div><dt>Driven (as planned)</dt><dd>${fmtKm(res.nominal.distance)}</dd></div>
-        <div><dt>Lowest battery</dt><dd>${Math.max(0, Math.round(res.nominal.minSoc * 100))}%</dd></div>
-      </dl>
-      <div class="row"><button class="ghost" type="button" data-open>Open forecast</button><button class="ghost" type="button" data-remove>Remove</button></div>`;
-    card.querySelector('strong').textContent = res.rover.name;
-    card.querySelector('.chip-sub').textContent = `${res.landingName} · ${res.waypoints.length > 1 ? fmtKm(res.nominal.routeLength) + ' route' : 'stays put'} · ${fmtDate(res.nominal.start)} · ${res.nominal.days} d`;
-    grid.appendChild(card);
-    drawChart(card.querySelector('canvas'), res, { compact: true });
-    card.querySelector('[data-open]').addEventListener('click', () => { state.result = res; closePanel('compare'); renderReport(); setStage('forecast'); });
-    card.querySelector('[data-remove]').addEventListener('click', () => { state.saved.splice(i, 1); $('cmpCount').textContent = state.saved.length; openCompare(); });
-  });
-}
-
-// ---------- toolbar ----------
-function setTool(name, on) {
-  const b = document.querySelector(`.tool[data-tool="${name}"]`);
+// ============ map tools ============
+function setToolOn(name, on) {
+  const b = document.querySelector(`.mt[data-tool="${name}"]`);
   if (!b) return;
   b.classList.toggle('on', on);
   b.setAttribute('aria-pressed', String(on));
 }
-document.querySelectorAll('.tool').forEach((b) => b.addEventListener('click', () => {
+document.querySelectorAll('.mt').forEach((b) => b.addEventListener('click', () => {
   const t = b.dataset.tool;
-  const on = !b.classList.contains('on');
+  if (t === 'zin') { globe.cam.interrupt(); globe.cam.zoomBy(0.5); }
+  if (t === 'zout') { globe.cam.interrupt(); globe.cam.zoomBy(2); }
+  if (t === 'fit') {
+    if (state.mode === 'run') setCam('off');
+    const pts = state.route?.pts ?? state.waypoints;
+    if (pts.length) globe.frameRoute(pts); else globe.flyHome();
+  }
+  if (t === 'home') { if (state.mode === 'run') setCam('off'); globe.flyHome(); }
   if (t === 'map') toggleSunMap();
-  if (t === 'sun') { setTool('sun', on); globe.setFullLight(!on); toast(on ? 'Real sunlight for the chosen date and time.' : 'Viewing light: terrain lit from the side so it is easy to see anywhere. Turn Sunlight back on for real lighting.'); }
-  if (t === 'relief') { setTool('relief', on); globe.setRelief(on ? 5 : 1); $('reliefLabel').textContent = on ? 'Relief ×5' : 'Relief ×1'; }
-  if (t === 'fly') { globe.setFollow(false); const pts = state.route ? state.route.pts : state.waypoints; if (pts.length) globe.frameRoute(pts); }
-  if (t === 'home') { globe.setFollow(false); globe.flyHome(); }
-  if (t === 'stand') openStand();
-  if (t === 'compare') openCompare();
+  if (t === 'relief') { const on = b.getAttribute('aria-pressed') !== 'true'; setToolOn('relief', on); globe.setRelief(on ? 5 : 1); toast(on ? 'Relief exaggerated 5× so hills and craters stand out.' : 'True-scale relief.'); }
+  if (t === 'sun') { const on = b.getAttribute('aria-pressed') !== 'true'; setToolOn('sun', on); globe.setFullLight(!on); toast(on ? 'Real sunlight at the mission time.' : 'Even viewing light: terrain lit from the side so it reads anywhere, day or night.'); }
 }));
 
-// ---------- time ----------
-function setTime(d, vectors) {
-  state.time = d;
-  globe.setSunDirection((vectors ?? ephemeris(15 * 60 * 1000)(d.getTime())).sun);
-  $('clock').textContent = `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
-  $('dateStr').textContent = `${fmtDate(d)} UTC`;
-  if (document.activeElement !== $('timeInput')) $('timeInput').value = toLocalInput(d);
-  if (state.stage !== 'replay') updateReadout();
-}
-$('timeChip').addEventListener('click', () => {
-  const p = $('timePanel');
-  p.hidden = !p.hidden;
-  $('timeChip').setAttribute('aria-expanded', String(!p.hidden));
+document.addEventListener('keydown', (e) => {
+  if (e.target.closest?.('input, select, textarea')) return;
+  if (e.key === ' ' && state.mode === 'run') { e.preventDefault(); setPlaying(!replay.playing); }
+  if (e.key === 'Escape' && !$('stand').hidden) $('stand').hidden = true;
+  if ((e.key === 'Backspace' || e.key === 'Delete') && state.mode === 'plan' && state.waypoints.length > 1) { state.waypoints.pop(); routeChanged(); }
 });
-$('timeInput').addEventListener('change', (e) => { const d = fromLocalInput(e.target.value); if (d) setTime(d); });
-document.querySelectorAll('[data-step]').forEach((b) => b.addEventListener('click', () => setTime(new Date(state.time.getTime() + +b.dataset.step * HOUR))));
-$('nowBtn').addEventListener('click', () => setTime(new Date()));
-let playing = false, last = performance.now();
-$('playBtn').addEventListener('click', (e) => { playing = !playing; e.currentTarget.setAttribute('aria-pressed', String(playing)); last = performance.now(); });
-globe.onFrame = () => {
-  const now = performance.now();
-  if (state.stage === 'replay') replayFrame(false);
-  else if (playing) setTime(new Date(state.time.getTime() + (now - last) * 20000));
-  last = now;
-};
-globe.onNight = () => { if (state.stage !== 'replay') toast('It is night here at the chosen time. Tap Sunlight to switch to a viewing light, or change the time.'); };
 
-// ---------- start ----------
-if (window.innerWidth < 900) closePanel('setup'); else openPanel('setup');
+Object.assign(window.lunaview, { replay, seek, setPlaying, setMode });
+
+// ============ time ============
+function setTime(d) { globe.setSunDirection(eph15(d.getTime()).sun); }
+globe.onFrame = () => { if (state.mode === 'run') replayFrame(false); };
+
+// ============ start ============
 syncRoverForm();
 syncTiming();
-fStart.value = SITES[0].id;
 setTime(state.start);
-routeChanged().then(() => globe.frameRoute(state.route.pts));
+renderWaypoints();
+renderInstructions();

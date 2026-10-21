@@ -18,26 +18,40 @@ npm run build          # static site in dist/ (deploy to Netlify)
 
 ## Using it
 
-The app works in three stages, shown as tabs at the top.
+The screen works like mission control over a 3D Moon, in three steps shown at the top.
 
-1. **Plan**
-   - **Rover**: pick a preset or enter your own specifications (mass, solar array, battery, power draws, speed,
-     steepest slope, insulation, heaters, temperature limits, whether it needs Earth in view to drive).
-   - **Landing**: anywhere on the Moon. Type a place or coordinates in the search box, pick from the list
-     (south-pole candidate sites, Apollo, Lunokhod, Chang'e, Chandrayaan-3, SLIM, big craters), or press
-     **Click the Moon to land** and click the ground.
-   - **Route**: **Add route points** and click the ground. **Find the sunniest route** plans a path that stays in
-     sunlight and avoids slopes the rover can't climb. **Sun map** shows how much of the mission each spot is sunlit.
-   - **When**: landing date, mission length, how many days the landing could slip, and how many runs.
-2. **Forecast**: **Simulate** gives the success rate, why runs failed, an hour-by-hour chart of battery, ground
-   temperature, sunlight, Earth contact and rover activity, a mission log, and tested suggestions.
-3. **Replay**: watch the rover drive the route on the 3D Moon. The camera follows it (drag to look around; press
-   **Following rover** to fly freely), the panel turns to the Sun, the trail shows where it has been, and a live
-   panel shows the day, battery, ground temperature, sunlight, Earth contact and power. The timeline strip shows
-   sunlight (top) and what the rover was doing (bottom) with marks for events; drag it to jump to any moment,
-   pick a speed, or press Space to pause. The replay stops at key events (entering shadow, a blocked slope,
-   arrival, failure) with a caption. **Sky** shows the rover's sky at that moment; **Compare** lines up to three
-   forecasts.
+1. **Plan route**
+   - **Rover**: pick Micro, Mid-size or Large, or edit the specifications: mass, solar array, battery, power
+     draws, speed, steepest slope, insulation, heaters, temperature limits, and whether it needs Earth in view.
+   - **Route, anywhere on the Moon**: click the Moon to set the landing site, then keep clicking to add waypoints.
+     You can also pick a known place (south-pole sites, Apollo, Lunokhod, Chang'e, Chandrayaan-3, SLIM) or search.
+     - The route line is coloured by slope against the rover's limit.
+     - The **route profile** shows the elevation along the way.
+     - **Hazards spotted** lists steep stretches, slopes too steep to climb, crater floors and long climbs before
+       you launch.
+     - **Auto-route for sunlight** re-plans between your points to stay in sunlight.
+   - **Mission window**: landing date, mission length, how many days the landing could slip, how many variations.
+2. **Simulation**: **Launch simulation** runs the planned mission and dozens of variations, then the rover drives
+   the route on the 3D Moon.
+   - The camera chases the rover. You can also choose Orbit, Top or Free; drag to look around.
+   - The real Sun and shadows move with mission time.
+   - A telemetry panel shows the day, battery, ground temperature, solar power, power use, heaters, slope, Sun and
+     Earth link, with live graphs.
+   - The **mission log** fills in as hurdles happen, with a banner and a marker on the ground: nightfall, terrain
+     shadow, lost Earth contact, ground too hot to drive, wheel slip, crater crossings, low battery, arrival and
+     failure.
+   - Drag the timeline to jump to any moment. Press Space to pause. **Sky** shows the rover's sky.
+3. **Debrief**: chance of success and the result of the planned run.
+   - **Key numbers**: distance, arrival day, coldest and hottest ground, lowest battery, energy in and used,
+     heater energy, time in the dark, time without Earth contact, worst wheel slip.
+   - **Every hurdle encountered**, with when, where, the temperature and battery at the time, and how the rover
+     dealt with it. Each has a **Watch** button.
+   - Also: the mission timeline chart, how all variations ended, tested suggestions to improve the odds, and
+     **Download report** (Markdown).
+
+**Camera**: drag to move the ground, right-drag (or Ctrl/Shift-drag, or two fingers) to turn and tilt, and scroll to
+zoom toward the cursor. Double-click zooms in. The camera eases toward each move and is checked against the drawn
+ground every frame, so it never goes underground or through a hill between it and the target.
 
 ## The simulation
 
@@ -51,7 +65,8 @@ Every 15 minutes of mission time, at the rover's current position:
 | Ground temperature | Radiative balance of sunlit regolith on the local slope (albedo 0.12, emissivity 0.95); cools toward ~95 K in shadow, with lag |
 | Heaters | Run in shadow: heat leak (W/K) × (minimum inside temperature − ground temperature), minus radioisotope heaters |
 | Battery | Solar in minus avionics, driving (plus climbing work), heaters; hibernation power in the dark |
-| Driving | Slower on slopes; slopes over the rover's limit block the route |
+| Driving | Wheel slip rises with slope (~5% on the flat, ~50% near the rover's rated slope), cutting speed; slopes over the limit block the route |
+| Hurdles | Spells of night, terrain shadow, no Earth contact, ground too hot to drive and waiting for sunlight, with their temperatures, battery and heater energy; steep stretches, crater floors (25 m+ depressions) and long climbs from the route profile |
 | Earth contact | Earth above the true skyline; optionally required to drive |
 
 The rover follows simple operating rules: it waits in sunlight if the route ahead is in shadow, unless the battery
@@ -75,7 +90,8 @@ replay the rover model is drawn larger than life so it stays visible.
 
 - `src/astro.js`: Sun and Earth direction in the Moon-fixed frame (astronomy-engine + IAU lunar rotation model,
   about 1′ accuracy), converted to elevation and azimuth at the site. Earth parallax is included.
-- `src/sim.js`: the rover simulator (one mission, and the Monte Carlo wrapper).
+- `src/sim.js`: the rover simulator (one mission with its hurdles, terrain hazards on a route, and the Monte Carlo wrapper).
+- `src/camera.js`: the map-style camera (pan, turn and tilt, zoom to cursor, follow the rover, ground collision).
 - `src/terrain.js`: heights, slopes and skylines anywhere on the Moon, from the 80 m polar DEM tiles
   (`public/textures/sim/`) and the whole-Moon height tiles (`public/textures/globe/c*_h.png`, 721 samples per 22.5°).
 - `src/planner.js`: sunlight map over the mission window and the sunniest-route planner.

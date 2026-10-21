@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { prepareRoute, ephemeris, simulate, monteCarlo } from '../src/sim.js';
+import { prepareRoute, ephemeris, simulate, monteCarlo, routeHazards } from '../src/sim.js';
 import { offset, distance } from '../src/terrain.js';
 import { ROVERS } from '../src/rovers.js';
 
@@ -58,4 +58,24 @@ test('A small solar rover at the equator does not survive the lunar night', () =
   const r = simulate({ terrain: flat, eph: ephemeris(15 * 60 * 1000), rover: ROVERS[0], route: prepareRoute(flat, [site]), start: new Date('2026-12-01T00:00Z'), days: 30 });
   assert.equal(r.success, false, r.text);
   assert.equal(r.cause, 'battery');
+});
+
+test('Hurdles: a dark ridge is reported as shadow with its temperature, and the death as fatal', () => {
+  const r = simulate(base(fake({ skyline: 3 })));
+  const shadow = r.hurdles.find((h) => h.type === 'shadow' || h.type === 'night');
+  assert.ok(shadow, r.hurdles.map((h) => h.type).join(','));
+  assert.ok(shadow.minTempC < -150, `${shadow.minTempC}`);
+  assert.ok(shadow.t1 > shadow.t0);
+  const dead = r.hurdles.find((h) => h.type === 'dead');
+  assert.ok(dead?.fatal);
+  assert.ok(r.events.every((e) => typeof e.type === 'string'));
+});
+
+test('Hurdles: steep ground near the rover limit causes wheel slip; a wall is flagged before the drive', () => {
+  const steep = simulate(base(fake({ slope: 17 })));
+  assert.ok(steep.maxSlip > 0.3, `${steep.maxSlip}`);
+  assert.ok(steep.hurdles.some((h) => h.type === 'slip'));
+  assert.ok(steep.hurdles.some((h) => h.type === 'slope'));
+  const hz = routeHazards(base(fake({ rampFromM: 1000 })).route, ROVERS[1]);
+  assert.ok(hz.some((h) => h.type === 'wall' && h.d0 > 900 && h.d0 < 1100), JSON.stringify(hz));
 });

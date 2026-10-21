@@ -6,137 +6,39 @@
   <title>LunaView</title>
   <meta name="claude:viewport-fit-sides" content="cover">
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Ccircle cx=%2216%22 cy=%2216%22 r=%2214%22 fill=%22%23c9c4b8%22/%3E%3Ccircle cx=%2211%22 cy=%2212%22 r=%223%22 fill=%22%23a39d90%22/%3E%3Ccircle cx=%2220%22 cy=%2220%22 r=%224%22 fill=%22%23a39d90%22/%3E%3C/svg%3E">
-  <meta name="description" content="Simulate a lunar rover mission before launch: real terrain, sunlight, temperature, battery and Earth contact.">
+  <meta name="description" content="Plan a lunar rover route anywhere on the Moon, simulate the mission on real NASA terrain and sunlight, watch the rover drive it, and get a debrief of every hurdle.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Saira+Condensed:wght@500;600;700&display=swap">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=Saira+Condensed:wght@500;600;700&display=swap">
 </head>
 <body>
-  <main id="app" data-stage="plan">
-    <canvas id="globe" aria-label="3D Moon. Drag to rotate, scroll to zoom, double-click to fly in. While choosing a landing site or route, click the ground."></canvas>
+  <main id="app" data-mode="plan">
+    <canvas id="globe" aria-label="3D Moon. Drag to move, right-drag to turn and tilt, scroll to zoom. In planning, click the ground to set the landing point and add waypoints."></canvas>
     <div id="labels" class="labels"></div>
 
-    <header class="top">
-      <button class="round" id="menuBtn" type="button" aria-label="Show the mission plan" aria-controls="setup" aria-expanded="true">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
-      </button>
-      <nav class="stages" aria-label="Mission stages">
-        <button type="button" data-stage="plan" aria-current="step"><b>1</b>Plan</button>
-        <button type="button" data-stage="forecast" disabled><b>2</b>Forecast</button>
-        <button type="button" data-stage="replay" disabled><b>3</b>Replay</button>
-      </nav>
+    <!-- Top bar -->
+    <header class="topbar">
+      <div class="logo"><span class="logo-mark" aria-hidden="true"></span><div><b>LUNAVIEW</b><small>Rover mission simulator</small></div></div>
+      <ol class="steps" aria-label="Mission steps">
+        <li><button type="button" data-goto="plan" aria-current="step"><b>1</b><span>Plan route</span></button></li>
+        <li><button type="button" data-goto="run" disabled><b>2</b><span>Simulation</span></button></li>
+        <li><button type="button" data-goto="debrief" disabled><b>3</b><span>Debrief</span></button></li>
+      </ol>
       <div class="search" role="search">
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6"/><path d="m15 15 5 5"/></svg>
-        <input id="search" type="search" placeholder="Land at a place or coordinates (0.67, 23.47)" autocomplete="off" aria-label="Choose a landing place">
+        <input id="search" type="search" placeholder="Go to a place or coordinates" autocomplete="off" aria-label="Go to a place on the Moon">
         <ul id="results" class="results" role="listbox" hidden></ul>
       </div>
-      <button class="cta" id="runBtn" type="button">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v16l13-8Z"/></svg>
-        <span>Simulate</span>
-      </button>
     </header>
 
-    <div class="brand" aria-hidden="true">LUNAVIEW<span>Rover mission simulator</span></div>
-    <div class="mode-hint" id="modeHint" hidden></div>
-
-    <!-- Replay: live readout while the rover drives -->
-    <section class="hud" id="hud" hidden aria-label="Rover status" aria-live="off">
-      <div class="hud-time"><span id="hudDay">Day 1</span><span class="mono" id="hudClock">00:00 UTC</span></div>
-      <div class="hud-state" id="hudState">Driving</div>
-      <div class="gauge"><span>Battery</span><div class="bar"><i id="hudBatt"></i></div><b class="mono" id="hudBattTxt">100%</b></div>
-      <div class="hud-grid">
-        <div><span>Ground</span><b class="mono" id="hudTemp">—</b></div>
-        <div><span>Driven</span><b class="mono" id="hudDist">—</b></div>
-        <div><span>Sun</span><b id="hudSun">—</b></div>
-        <div><span>Earth</span><b id="hudEarth">—</b></div>
-        <div><span>Solar in</span><b class="mono" id="hudGen">—</b></div>
-        <div><span>Power use</span><b class="mono" id="hudLoad">—</b></div>
-      </div>
-      <p class="hint" id="hudScale"></p>
-    </section>
-    <div class="caption" id="caption" hidden></div>
-
-    <div class="bottom">
-      <button class="chip site-chip" id="siteChip" type="button" title="Show the mission plan">
-        <span class="chip-k">ROVER</span>
-        <span id="siteName">MID-SIZE ROVER</span>
-        <span class="chip-sub" id="siteCoords">No route yet</span>
-      </button>
-
-      <div class="center-stack">
-        <div class="timeline" id="timeline" hidden>
-          <button class="round small" type="button" id="pbPlay" aria-label="Play the mission">▶</button>
-          <select id="pbSpeed" aria-label="Replay speed">
-            <option value="1">1 hour / s</option>
-            <option value="4" selected>4 hours / s</option>
-            <option value="12">12 hours / s</option>
-            <option value="24">1 day / s</option>
-          </select>
-          <div class="scrub"><canvas id="pbStrip" aria-label="Mission timeline: rover activity and events. Drag to move through the mission."></canvas></div>
-          <span class="mono" id="pbText"></span>
-          <button class="ghost" type="button" id="followBtn" aria-pressed="true">Following rover</button>
-        </div>
-        <div class="readout" id="readout" aria-live="polite">
-          <span class="sun-dot"></span><span id="roSun">Sun —</span>
-          <span class="earth-dot"></span><span id="roEarth">Earth —</span>
-        </div>
-        <nav class="toolbar" aria-label="View controls">
-          <button type="button" class="tool on" data-tool="sun" aria-pressed="true" title="Real sunlight for the chosen time">
-            <svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="5"/><path d="M16 4v4M16 24v4M4 16h4M24 16h4M7.5 7.5l2.8 2.8M21.7 21.7l2.8 2.8M7.5 24.5l2.8-2.8M21.7 10.3l2.8-2.8"/></svg>
-            <span>Sunlight</span></button>
-          <button type="button" class="tool" data-tool="map" aria-pressed="false" title="Sunlight map: how much of the mission each spot is sunlit">
-            <svg viewBox="0 0 32 32"><rect x="5" y="5" width="22" height="22" rx="2"/><path d="M5 16h22M16 5v22"/><circle cx="10.5" cy="10.5" r="2.5"/></svg>
-            <span>Sun map</span></button>
-          <button type="button" class="tool" data-tool="relief" aria-pressed="false" title="Terrain height: true scale or 5x exaggerated">
-            <svg viewBox="0 0 32 32"><path d="M3 25 11 12l5 7 4-5 9 11Z"/></svg>
-            <span id="reliefLabel">Relief ×1</span></button>
-          <button type="button" class="tool" data-tool="fly" title="Fly to the route">
-            <svg viewBox="0 0 32 32"><circle cx="14" cy="14" r="8"/><path d="m20 20 7 7M14 10v8M10 14h8"/></svg>
-            <span>Route</span></button>
-          <button type="button" class="tool" data-tool="home" title="Back to the whole Moon">
-            <svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="11"/><path d="M8 12c4 2 12 2 16 0M8 20c4-2 12-2 16 0"/></svg>
-            <span>Globe</span></button>
-          <button type="button" class="tool" data-tool="stand" title="Stand where the rover is">
-            <svg viewBox="0 0 32 32"><path d="M3 24c4-5 7-7 10-5s5-6 9-4 5 4 7 4"/><circle cx="22" cy="8" r="3"/><path d="M3 27h26"/></svg>
-            <span>Sky</span></button>
-          <button type="button" class="tool" data-tool="compare" title="Compare simulated missions">
-            <svg viewBox="0 0 32 32"><rect x="5" y="7" width="8" height="18" rx="1"/><rect x="19" y="11" width="8" height="14" rx="1"/></svg>
-            <span>Compare <b id="cmpCount">0</b></span></button>
-        </nav>
-      </div>
-
-      <button class="chip time-chip" id="timeChip" type="button" aria-controls="timePanel" aria-expanded="false" title="Change date and time (UTC)">
-        <span id="clock" class="clock">00:00:00</span>
-        <span id="dateStr" class="chip-sub">2026-11-20 UTC</span>
-      </button>
-    </div>
-
-    <section class="time-panel" id="timePanel" hidden aria-label="Time controls">
-      <label for="timeInput">Date and time (UTC)</label>
-      <input type="datetime-local" id="timeInput" step="3600">
-      <div class="row">
-        <button type="button" class="ghost" data-step="-24">−1 day</button>
-        <button type="button" class="ghost" data-step="-1">−1 h</button>
-        <button type="button" class="ghost" id="playBtn" aria-pressed="false">Play ×20000</button>
-        <button type="button" class="ghost" data-step="1">+1 h</button>
-        <button type="button" class="ghost" data-step="24">+1 day</button>
-      </div>
-      <button type="button" class="link" id="nowBtn">Jump to now</button>
-    </section>
-
-    <!-- Stage 1: plan -->
-    <aside class="drawer left" id="setup" aria-label="Mission plan">
-      <div class="drawer-head">
-        <h2>Plan the mission</h2>
-        <button class="close" type="button" data-close="setup" aria-label="Hide the mission plan">×</button>
-      </div>
-      <form id="missionForm" class="form" novalidate>
-        <fieldset>
-          <legend><span class="step">1</span>Rover</legend>
-          <label for="fRover">Rover</label>
-          <select id="fRover"></select>
-          <details id="roverDetails">
-            <summary>Rover specifications</summary>
+    <!-- ============ 1. PLAN ============ -->
+    <aside class="panel plan-panel" id="planPanel" aria-label="Mission plan">
+      <div class="panel-scroll">
+        <section class="card">
+          <h2><span class="num">1</span>Choose the rover</h2>
+          <div class="rover-cards" id="roverCards" role="radiogroup" aria-label="Rover"></div>
+          <details class="specs">
+            <summary>Edit specifications</summary>
             <div class="spec-grid" id="specGrid"></div>
             <label for="fPanel">Solar panels</label>
             <select id="fPanel">
@@ -144,86 +46,163 @@
               <option value="horizontal">Flat on top (best near the equator)</option>
             </select>
             <label class="check"><input type="checkbox" id="fComms"> Needs Earth in view to drive</label>
-            <p class="hint">Preset values are illustrative. Replace them with your rover's numbers.</p>
+            <p class="hint">Presets are illustrative. Enter your rover's real numbers.</p>
           </details>
-        </fieldset>
+        </section>
 
-        <fieldset>
-          <legend><span class="step">2</span>Landing site and route</legend>
-          <p class="hint">Anywhere on the Moon. Pick a place, search above, or click the Moon.</p>
-          <label for="fStart">Landing place</label>
-          <select id="fStart"></select>
+        <section class="card">
+          <h2><span class="num">2</span>Draw the route</h2>
+          <p class="instr" id="routeInstr"></p>
           <div class="row">
-            <button class="ghost" type="button" id="landBtn" aria-pressed="false">Click the Moon to land</button>
-            <button class="ghost" type="button" id="drawBtn" aria-pressed="false">Add route points</button>
+            <select id="fStart" aria-label="Land at a known place"></select>
           </div>
           <ol class="waypoints" id="wpList"></ol>
-          <div class="row">
-            <button class="ghost" type="button" id="undoBtn">Undo</button>
-            <button class="ghost" type="button" id="clearBtn">Clear route</button>
-            <button class="ghost" type="button" id="planBtn">Find the sunniest route</button>
+          <div class="row wrap">
+            <button class="btn" type="button" id="undoBtn">Undo point</button>
+            <button class="btn" type="button" id="clearBtn">Clear route</button>
+            <button class="btn" type="button" id="newLandBtn">New landing site</button>
+            <button class="btn accent" type="button" id="planBtn" title="Re-plan the route between your points to stay in sunlight and avoid slopes the rover can't climb">Auto-route for sunlight</button>
           </div>
-          <p class="hint" id="routeStats"></p>
-        </fieldset>
+          <div class="route-stats" id="routeStats"></div>
+          <div id="hazardBox" class="hazard-box" hidden>
+            <h3>Hazards spotted on this route</h3>
+            <ul id="hazardList" class="hazard-list"></ul>
+          </div>
+        </section>
 
-        <fieldset>
-          <legend><span class="step">3</span>When</legend>
+        <section class="card">
+          <h2><span class="num">3</span>Mission window</h2>
           <label for="fDate">Landing date and time (UTC)</label>
           <input id="fDate" type="datetime-local" step="3600">
           <div class="two">
             <div><label for="fDays">Mission length (days)</label><input id="fDays" type="number" min="1" max="60" step="1"></div>
-            <div><label for="fSlip">Landing could slip by ± days</label><input id="fSlip" type="number" min="0" max="10" step="1"></div>
+            <div><label for="fSlip">Landing may slip ± days</label><input id="fSlip" type="number" min="0" max="10" step="1"></div>
           </div>
-          <label class="check"><input type="checkbox" id="fSurvive" checked> Rover must survive to the end, not just reach the destination</label>
-          <label for="fRuns">Simulated runs</label>
-          <select id="fRuns"><option value="25">25 (quick)</option><option value="50" selected>50</option><option value="100">100 (thorough)</option></select>
-        </fieldset>
-        <button class="cta wide" type="submit" id="simBtn">Simulate the mission</button>
-        <p class="hint" id="simStatus" aria-live="polite"></p>
-      </form>
-    </aside>
-
-    <!-- Stage 2: forecast -->
-    <aside class="drawer right" id="report" aria-label="Mission forecast" hidden>
-      <div class="drawer-head">
-        <h2>Mission forecast</h2>
-        <button class="close" type="button" data-close="report" aria-label="Close mission forecast">×</button>
+          <div class="two">
+            <div><label for="fRuns">Simulated variations</label><select id="fRuns"><option value="25">25 (quick)</option><option value="50" selected>50</option><option value="100">100 (thorough)</option></select></div>
+            <div class="check-cell"><label class="check"><input type="checkbox" id="fSurvive" checked> Must survive to the end</label></div>
+          </div>
+          <p class="hint" id="windowHint"></p>
+        </section>
       </div>
-      <div id="reportBody"></div>
+      <div class="panel-foot">
+        <button class="launch" type="button" id="launchBtn">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2c3 2 5 6 5 10l-2 4H9l-2-4c0-4 2-8 5-10Z"/><circle cx="12" cy="9" r="1.6"/><path d="M9 16l-2 4 3-1M15 16l2 4-3-1"/></svg>
+          <span>Launch simulation</span>
+        </button>
+        <p class="hint center" id="launchHint"></p>
+      </div>
     </aside>
 
-    <!-- Screen 4: stand on the Moon -->
-    <section class="stand" id="stand" hidden aria-label="Stand on the Moon">
+    <!-- Elevation profile of the planned route -->
+    <section class="profile" id="profile" hidden aria-label="Route elevation profile">
+      <div class="profile-head"><b>Route profile</b><span class="hint" id="profileText"></span></div>
+      <canvas id="profileCanvas"></canvas>
+    </section>
+
+    <div class="map-hint" id="mapHint"></div>
+
+    <!-- Map controls -->
+    <nav class="map-tools" aria-label="View controls">
+      <button type="button" class="mt" data-tool="zin" title="Zoom in" aria-label="Zoom in">+</button>
+      <button type="button" class="mt" data-tool="zout" title="Zoom out" aria-label="Zoom out">−</button>
+      <button type="button" class="mt" data-tool="fit" title="Fit the route" aria-label="Fit the route"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+      <button type="button" class="mt" data-tool="home" title="Whole Moon" aria-label="Whole Moon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M5 10c4 1.5 10 1.5 14 0M5 14c4-1.5 10-1.5 14 0"/></svg></button>
+      <button type="button" class="mt" data-tool="map" title="Sunlight map: how much of the mission each spot is sunlit" aria-label="Sunlight map" aria-pressed="false"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 12h16M12 4v16"/><circle cx="8" cy="8" r="1.5"/></svg></button>
+      <button type="button" class="mt" data-tool="relief" title="Exaggerate relief ×5" aria-label="Exaggerate relief" aria-pressed="false"><svg viewBox="0 0 24 24"><path d="M2 19 9 8l4 6 3-4 6 9Z"/></svg></button>
+      <button type="button" class="mt on" data-tool="sun" title="Real sunlight at the mission time (off: even viewing light)" aria-label="Real sunlight" aria-pressed="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2"/></svg></button>
+    </nav>
+
+    <!-- ============ computing ============ -->
+    <div class="computing" id="computing" hidden role="alertdialog" aria-labelledby="compTitle">
+      <div class="comp-card">
+        <div class="orbit" aria-hidden="true"><i></i></div>
+        <h2 id="compTitle">Simulating the mission</h2>
+        <p id="compText">Loading terrain…</p>
+        <div class="bar big"><i id="compBar"></i></div>
+        <ul class="comp-steps" id="compSteps"></ul>
+      </div>
+    </div>
+
+    <!-- ============ 2. RUN ============ -->
+    <section class="telemetry" id="telemetry" hidden aria-label="Rover telemetry">
+      <div class="tm-head">
+        <div><span class="tm-day" id="tmDay">Day 1</span><span class="tm-clock mono" id="tmClock">00:00 UTC</span></div>
+        <span class="badge" id="tmState">Driving</span>
+      </div>
+      <p class="tm-why" id="tmWhy"></p>
+      <div class="progress-km">
+        <div class="bar"><i id="tmRoute"></i></div>
+        <span class="mono" id="tmDist">0.0 / 0.0 km</span>
+      </div>
+      <div class="gauges">
+        <div class="gauge" id="gBatt"><span class="g-k">Battery</span><b class="g-v mono" id="tmBatt">100%</b><div class="bar"><i id="tmBattBar"></i></div></div>
+        <div class="gauge" id="gTemp"><span class="g-k">Ground temp</span><b class="g-v mono" id="tmTemp">—</b><div class="bar temp"><i id="tmTempBar"></i></div></div>
+      </div>
+      <dl class="tm-grid">
+        <div><dt>Solar in</dt><dd class="mono" id="tmGen">—</dd></div>
+        <div><dt>Power use</dt><dd class="mono" id="tmLoad">—</dd></div>
+        <div><dt>Heaters</dt><dd class="mono" id="tmHeat">—</dd></div>
+        <div><dt>Slope</dt><dd class="mono" id="tmSlope">—</dd></div>
+        <div><dt>Sun</dt><dd id="tmSun">—</dd></div>
+        <div><dt>Earth link</dt><dd id="tmEarth">—</dd></div>
+      </dl>
+      <canvas id="tmSpark" aria-label="Battery and temperature so far"></canvas>
+      <div class="spark-legend"><span><i class="ok"></i>Battery</span><span><i class="hot"></i>Ground temp</span></div>
+      <p class="hint small" id="tmScale"></p>
+    </section>
+
+    <aside class="feed" id="feed" hidden aria-label="Mission log">
+      <div class="feed-head"><b>Mission log</b><span class="hint" id="feedCount"></span></div>
+      <ol class="feed-list" id="feedList" aria-live="polite"></ol>
+    </aside>
+
+    <div class="banner" id="banner" hidden role="status"></div>
+
+    <footer class="runbar" id="runbar" hidden>
+      <button class="play" type="button" id="pbPlay" aria-label="Pause">❚❚</button>
+      <div class="speed" role="group" aria-label="Playback speed">
+        <button type="button" data-speed="1">1×</button>
+        <button type="button" data-speed="4" aria-pressed="true">4×</button>
+        <button type="button" data-speed="16">16×</button>
+        <button type="button" data-speed="64">64×</button>
+      </div>
+      <div class="scrub">
+        <canvas id="pbStrip" aria-label="Mission timeline. Drag to jump to any moment."></canvas>
+        <span class="mono scrub-text" id="pbText"></span>
+      </div>
+      <div class="cams" role="group" aria-label="Camera">
+        <button type="button" data-cam="chase" aria-pressed="true" title="Behind the rover">Chase</button>
+        <button type="button" data-cam="orbit" title="Locked on the rover; drag to look around">Orbit</button>
+        <button type="button" data-cam="top" title="From above">Top</button>
+        <button type="button" data-cam="off" title="Free camera">Free</button>
+      </div>
+      <button class="btn" type="button" id="skyBtn" title="The sky from the rover">Sky</button>
+      <button class="btn accent" type="button" id="toDebrief">Debrief</button>
+    </footer>
+
+    <!-- ============ 3. DEBRIEF ============ -->
+    <section class="debrief" id="debrief" hidden aria-label="Mission debrief">
+      <div class="debrief-inner" id="debriefBody"></div>
+    </section>
+
+    <!-- Sky from the rover -->
+    <section class="stand" id="stand" hidden aria-label="Sky from the rover">
       <canvas id="pano" aria-label="360 degree sky from where the rover is. Drag to look around."></canvas>
       <div class="stand-top">
         <div>
-          <h2>Stand on the Moon</h2>
-          <p id="standSite" class="chip-sub"></p>
+          <h2>The sky from the rover</h2>
+          <p id="standSite" class="hint"></p>
         </div>
         <div class="row">
-          <button class="ghost" type="button" id="lookSun">Look at Sun</button>
-          <button class="ghost" type="button" id="lookEarth">Look at Earth</button>
-          <button class="close" type="button" data-close="stand" aria-label="Close sky view">×</button>
+          <button class="btn" type="button" id="lookSun">Look at Sun</button>
+          <button class="btn" type="button" id="lookEarth">Look at Earth</button>
+          <button class="close" type="button" id="closeStand" aria-label="Close sky view">×</button>
         </div>
       </div>
       <div class="stand-bottom">
-        <div class="readout big" id="standReadout"></div>
-        <div class="slider-row">
-          <button class="round small" type="button" id="standPlay" aria-label="Play">▶</button>
-          <input type="range" id="standSlider" min="0" max="336" value="0" aria-label="Mission hour">
-          <span id="standTime" class="mono"></span>
-        </div>
-        <p class="hint" id="standNote"></p>
+        <div class="readout" id="standReadout"></div>
       </div>
-    </section>
-
-    <!-- Screen 5: compare -->
-    <section class="compare" id="compare" hidden aria-label="Compare missions">
-      <div class="drawer-head">
-        <h2>Compare missions</h2>
-        <button class="close" type="button" data-close="compare" aria-label="Close compare">×</button>
-      </div>
-      <div class="cmp-grid" id="cmpGrid"></div>
     </section>
 
     <div class="toast" id="toast" role="status" hidden></div>

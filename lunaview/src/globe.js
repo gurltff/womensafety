@@ -1,7 +1,7 @@
 // 3D Moon globe built from NASA data: LROC colour, LOLA heights (displacement + normal map) and a
 // high-detail south-pole patch from the LOLA 80 m polar DEM that casts real shadows from the real Sun.
 import * as THREE from 'three';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { GeoCamera } from './camera.js';
 import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
@@ -13,7 +13,7 @@ export const toWorld = (v) => new THREE.Vector3(v.x, v.z, -v.y);
 
 const DEG = Math.PI / 180;
 const R_M = 1737400;
-const llToWorld = (lat, lon, r = 1) =>
+export const llToWorld = (lat, lon, r = 1) =>
   new THREE.Vector3(Math.cos(lat * DEG) * Math.cos(lon * DEG), Math.sin(lat * DEG), -Math.cos(lat * DEG) * Math.sin(lon * DEG)).multiplyScalar(r);
 
 // Built by tools/build_textures.py from NASA's CGI Moon Kit and LOLA polar data.
@@ -62,19 +62,14 @@ export class Globe {
     this.maxTex = this.renderer.capabilities.maxTextureSize;
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(35, 1, 0.00002, 200);
-    this.camera.position.copy(llToWorld(-40, 8, 5.2));
 
-    this.controls = new OrbitControls(this.camera, canvas);
-    this.controls.enableDamping = true;
-    this.controls.dampingFactor = 0.08;
-    this.controls.enablePan = false;
-    this.controls.minDistance = 1.002;
-    this.controls.maxDistance = 9;
-    this.controls.rotateSpeed = 0.5;
-    this.controls.zoomSpeed = 1.2;
-    this.controls.autoRotate = true;
-    this.controls.autoRotateSpeed = 0.35;
-    this.controls.addEventListener('start', () => { this.controls.autoRotate = false; this.flight = null; });
+    this.cam = new GeoCamera(this.camera, canvas, {
+      heightAt: (dir) => this.terrainHeightAt(dir),
+      relief: () => this.relief,
+      pick: (x, y) => { const hit = this.pickPoint({ clientX: x, clientY: y }); return hit ? llToWorld(hit.lat, hit.lon) : null; },
+      // Closest view where the data still looks sharp: 20 m polar tiles, the 80 m polar patch, ~950 m elsewhere.
+      minDistAt: (dir) => { const lat = Math.asin(dir.y / dir.length()) / DEG; return (lat < -87.6 ? 250 : lat < -84.6 ? 800 : 2500) / R_M; },
+    });
 
     this.sun = new THREE.DirectionalLight(0xfff4e0, 3.2);
     this.sunTarget = new THREE.Object3D();
@@ -102,11 +97,17 @@ export class Globe {
     this.raycaster = new THREE.Raycaster();
     canvas.addEventListener('pointerdown', (e) => { this.down = [e.clientX, e.clientY]; });
     canvas.addEventListener('dblclick', (e) => {
+      clearTimeout(this.clickTimer);
       const hit = this.pickPoint(e);
-      if (hit) this.flyToPoint(hit.lat, hit.lon);
+      if (hit) this.cam.flyTo({ target: llToWorld(hit.lat, hit.lon), dist: Math.max(this.cam.minDist, this.cam.cur.dist * 0.3), ms: 900 });
     });
     canvas.addEventListener('pointerup', (e) => {
-      if (this.down && Math.hypot(e.clientX - this.down[0], e.clientY - this.down[1]) < 5) this.pickAt(e);
+      // A click (not a drag), held back a moment so a double-click zooms instead of clicking twice.
+      if (this.down && Math.hypot(e.clientX - this.down[0], e.clientY - this.down[1]) < 5 && e.button === 0) {
+        const ev = { clientX: e.clientX, clientY: e.clientY };
+        clearTimeout(this.clickTimer);
+        this.clickTimer = setTimeout(() => this.pickAt(ev), 260);
+      }
     });
 
     this.resize();
@@ -209,13 +210,51 @@ export class Globe {
     return { data, w: img.width, h: img.height };
   }
 
-  // Ground height (metres) under a world direction, from the finest data held on the CPU:
-  // the simulator's 80 m tiles where loaded (fineHeight), else the coarser globe data.
+  // Ground height (metres) under a world direction, exactly as drawn on screen, so the camera,
+  // rover and route sit on the ground you see.
   terrainHeightAt(dir) {
     const d = dir.clone().normalize();
-    const lat = Math.asin(d.y) / DEG, lon = Math.atan2(-d.z, d.x) / DEG;
-    const fine = this.fineHeight?.(lat, lon);
-    return Number.isFinite(fine) ? fine : this.coarseHeight(lat, lon);
+    return this.drawnHeight(Math.asin(d.y) / DEG, Math.atan2(-d.z, d.x) / DEG);
+  }
+
+  drawnHeight(lat, lon) {
+    // Bilinear over every step-th sample of a G x G height grid, as the mesh is built.
+    const grid = (H, G, step, row, col) => {
+      const n = Math.floor((G - 1) / step);
+      const r = THREE.MathUtils.clamp(row / step, 0, n), c = THREE.MathUtils.clamp(col / step, 0, n);
+      const r0 = Math.min(Math.floor(r), n - 1), c0 = Math.min(Math.floor(c), n - 1);
+      const fr = r - r0, fc = c - c0;
+      const at = (i, j) => H[i * step * G + j * step];
+      return (at(r0, c0) * (1 - fc) + at(r0, c0 + 1) * fc) * (1 - fr) + (at(r0 + 1, c0) * (1 - fc) + at(r0 + 1, c0 + 1) * fc) * fr;
+    };
+    const P = this.polarH;
+    if (P && lat < P.limit) {
+      const rho = 2 * R_M * Math.tan(Math.PI / 4 + (lat * DEG) / 2);
+      const x = rho * Math.sin(lon * DEG), y = rho * Math.cos(lon * DEG);
+      const d = this.detail;
+      if (d && Math.abs(x) < d.half_m && Math.abs(y) < d.half_m) {
+        const c = Math.floor((x + d.half_m) / d.size), r = Math.floor((d.half_m - y) / d.size);
+        const t = d.tiles.get(`${r}_${c}`);
+        if (t?.mesh?.visible && t.hm) {
+          const x0 = -d.half_m + c * d.size, y0 = d.half_m - r * d.size, k = (t.hm.G - 1) / d.size;
+          return grid(t.hm.heights, t.hm.G, 1, (y0 - y) * k, (x - x0) * k);
+        }
+      }
+      const k = (P.G - 1) / (2 * P.half);
+      return grid(P.heights, P.G, 2, (P.half - y) * k, (x + P.half) * k);
+    }
+    const g = this.terrain?.globe;
+    if (g && this.chunks) {
+      const span = 180 / g.rows;
+      const L = ((lon + 180) % 360 + 360) % 360;
+      const r = Math.min(g.rows - 1, Math.floor((90 - lat) / span)), c = Math.min(g.cols - 1, Math.floor(L / span));
+      const t = this.chunks.get(`${r}_${c}`);
+      if (t?.mesh?.visible && t.hm) {
+        const G = t.hm.G;
+        return grid(t.hm.heights, G, 3, ((90 - lat) / span - r) * (G - 1), (L / span - c) * (G - 1));
+      }
+    }
+    return this.coarseHeight(lat, lon);
   }
 
   coarseHeight(lat, lon) {
@@ -398,6 +437,7 @@ export class Globe {
               heightAt: (i, j) => heights[i * G + j], skirtM: 400, material: this.regolith(normal),
             });
             t.mesh.material.side = THREE.DoubleSide;
+            t.hm = { heights, G };
           }).catch(() => d.tiles.delete(key));
         }
         if (t?.mesh) {
@@ -406,7 +446,7 @@ export class Globe {
         }
       }
     }
-    this.tileMask.value = mask;
+    if (mask !== this.tileMask.value) { this.tileMask.value = mask; this.placeMission(); }
   }
 
   // Full-resolution tiles for the whole Moon: load the ones near the camera, drop far ones.
@@ -453,6 +493,9 @@ export class Globe {
       }
     }
     this.chunkMask.value = mask;
+    // The drawn ground changed: lay the route and markers back onto it.
+    const sig = [...mask].join(',');
+    if (sig !== this.maskSig) { this.maskSig = sig; this.placeMission(); }
     // Free GPU memory held by tiles nobody has looked at for a while.
     if (this.chunks.size > 24) {
       const old = [...this.chunks].filter(([k, t]) => !keep.has(k) && t.mesh).sort((a, b) => a[1].used - b[1].used);
@@ -502,6 +545,7 @@ export class Globe {
         skirtM: 1500, material,
       });
       t.mesh.visible = false;
+      t.hm = { heights, G };
     } catch {
       this.chunks.delete(`${r}_${c}`);
     }
@@ -524,12 +568,11 @@ export class Globe {
       this.placeTerrain(m);
       m.material.normalScale.set(k, k);
     }
-    for (const pin of this.pins) pin.mesh.position.copy(this.sitePoint(pin.site, 0.0004));
     this.placeMission();
   }
 
   sitePoint(s, lift = 0) {
-    return llToWorld(s.lat, s.lon, 1 + ((s.heightM ?? 0) / R_M) * this.relief + lift);
+    return llToWorld(s.lat, s.lon, 1 + (this.drawnHeight(s.lat, s.lon) / R_M) * this.relief + lift);
   }
 
   buildGrid() {
@@ -562,7 +605,7 @@ export class Globe {
     for (const p of this.pins) this.scene.remove(p.mesh);
     this.pins = sites.map((s) => {
       const mesh = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 8), new THREE.MeshBasicMaterial({ color: 0xf2c14e }));
-      mesh.position.copy(this.sitePoint(s, 0.0004));
+      mesh.position.copy(this.sitePoint(s, 0.00003));
       mesh.userData.site = s;
       this.scene.add(mesh);
       const el = document.createElement('button');
@@ -619,7 +662,8 @@ export class Globe {
     if (first) {
       const lon = Math.atan2(-this.sunDir.z, this.sunDir.x) / DEG;
       this.homeLon = lon - 35;
-      this.camera.position.copy(llToWorld(-42, this.homeLon, 5.2));
+      const t = llToWorld(-42, this.homeLon);
+      this.cam.cur.target.copy(t); this.cam.goal.target.copy(t);
     }
     this.applyLight();
   }
@@ -649,12 +693,8 @@ export class Globe {
 
   // Shrink the shadow map to the area being looked at, so shadows sharpen as you zoom in.
   fitShadow() {
-    const t = this.controls.target;
-    // Shadow the area being looked at: the orbit target in a close-up, else the ground under the camera.
-    const cam = this.camera.position;
-    const centre = t.lengthSq() > 0.25 ? t.clone()
-      : cam.length() < 1.6 ? cam.clone().setLength(1 + (this.groundH ?? 0) / R_M * this.relief)
-      : this.poleCentre ?? (this.poleCentre = llToWorld(-90, 0, 1));
+    // Shadow the area being looked at.
+    const centre = this.cam.targetPoint();
     const size = THREE.MathUtils.clamp(this.camera.position.distanceTo(centre) * 0.9, 0.003, 0.1);
     if (Math.abs(size - (this.shadowSize ?? 0)) < size * 0.02 && this.sunTarget.position.distanceTo(centre) < size * 0.05) return;
     this.shadowSize = size;
@@ -663,37 +703,22 @@ export class Globe {
     sc.left = sc.bottom = -size; sc.right = sc.top = size;
     sc.near = 0; sc.far = size * 6 + 0.02;
     sc.updateProjectionMatrix();
-    this.sun.shadow.normalBias = size * 0.004;
+    this.sun.shadow.normalBias = size * (this.shadowBiasK ?? 0.012);
+    this.sun.shadow.bias = -size * (this.shadowBiasD ?? 0.0002);
     this.applyLight();
   }
 
-  // Close-up: orbit around the site, looking at it from 2 degrees equatorward and ~50 km up.
+  // Close-up of a site: ~60 km away, tilted to see the relief, facing north (south near the north pole).
   flyTo(site) {
-    const target = this.sitePoint(site);
-    // Outside the detailed pole area, stand further back so the 400 m data stays sharp and whole craters fit.
-    const near = site.lat < -84.6;
-    const back = (near ? 2.2 : 4) * (site.lat > 80 ? -1 : 1);
-    const cam = llToWorld(site.lat + back, site.lon, (near ? 1.03 : 1.07) + ((site.heightM ?? 0) / R_M) * this.relief);
-    this.startFlight(cam, target, 0.0005);
+    this.cam.flyTo({ target: llToWorld(site.lat, site.lon), dist: site.lat < -84.6 ? 0.025 : 0.04, tilt: 50 * DEG, heading: site.lat > 80 ? 180 : 0 });
   }
 
-  // Close-up of any spot: same framing as a site close-up.
-  flyToPoint(lat, lon) {
-    const h = this.terrainHeightAt(llToWorld(lat, lon));
-    this.flyTo({ lat, lon, heightM: h });
-  }
+  flyToPoint(lat, lon) { this.flyTo({ lat, lon }); }
 
   flyHome() {
-    this.startFlight(llToWorld(-42, this.homeLon ?? 8, 5.2), new THREE.Vector3(), 1.002);
-  }
-
-  startFlight(pos, target, minDistance) {
-    this.controls.autoRotate = false;
-    this.controls.minDistance = Math.min(this.controls.minDistance, minDistance);
-    this.flight = {
-      from: this.camera.position.clone(), to: pos,
-      tFrom: this.controls.target.clone(), tTo: target, minDistance, t0: performance.now(), upFrom: this.camera.up.clone(),
-    };
+    this.cam.setFollow(null);
+    this.follow = false;
+    this.cam.flyTo({ target: llToWorld(-42, this.homeLon ?? 8), dist: 4.2, tilt: 0, heading: 0 });
   }
 
   resize() {
@@ -706,23 +731,8 @@ export class Globe {
   }
 
   frame() {
-    if (this.flight) {
-      const f = this.flight;
-      const t = Math.min(1, (performance.now() - f.t0) / 1800);
-      const k = t < 0.5 ? 4 * t ** 3 : 1 - (-2 * t + 2) ** 3 / 2;
-      f.k = k;
-      // Slerp the direction and lerp the distance so the camera arcs around the Moon.
-      const a = f.from.clone().normalize(), b = f.to.clone().normalize();
-      const q = new THREE.Quaternion().setFromUnitVectors(a, b);
-      const dir = a.applyQuaternion(new THREE.Quaternion().slerp(q, k));
-      this.camera.position.copy(dir.multiplyScalar(THREE.MathUtils.lerp(f.from.length(), f.to.length(), k)));
-      this.controls.target.lerpVectors(f.tFrom, f.tTo, k);
-      if (t >= 1) { this.flight = null; this.controls.minDistance = f.minDistance; }
-    }
-    this.tuneControls();
-    this.controls.update();
-    this.followGround();
-    this.keepAboveGround();
+    this.onFrame?.();
+    this.cam.update();
     this.checkNight();
     this.frameNo = (this.frameNo ?? 0) + 1;
     if (this.frameNo % 8 === 0) this.updateDetail();
@@ -732,83 +742,6 @@ export class Globe {
     this.camera.updateMatrixWorld();
     this.updatePins();
     this.renderer.render(this.scene, this.camera);
-    this.onFrame?.();
-  }
-
-  // How close to the ground the camera may get: where the data runs out, so the ground never turns
-  // into big blurry pixels. ~35 km over most of the Moon (400 m colour), 5 km over the 80 m pole
-  // patch, 1 km over the 20 m pole tiles.
-  groundClearance() {
-    const p = this.camera.position;
-    const lat = Math.asin(p.y / p.length()) / DEG;
-    return lat < -87.6 ? 0.0006 : lat < -84.6 ? 0.003 : 0.02;
-  }
-
-  // In a close-up, keep the pivot on the ground after panning or zooming to the cursor, and go back
-  // to the whole-Moon view once you zoom far out.
-  followGround() {
-    const t = this.controls.target;
-    if (this.flight || t.lengthSq() < 1e-6) return;
-    t.setLength(1 + (this.terrainHeightAt(t) / R_M) * this.relief);
-    if (this.camera.position.distanceTo(t) > 0.6) {
-      this.startFlight(this.camera.position.clone().setLength(Math.max(this.camera.position.length(), 2)), new THREE.Vector3(), 1.002);
-    }
-  }
-
-  // Never let the camera pass into the ground, however it is moved.
-  keepAboveGround() {
-    const p = this.camera.position;
-    this.groundH = this.terrainHeightAt(p);
-    const surface = 1 + (this.groundH / R_M) * this.relief;
-    const closeUp = this.controls.target.lengthSq() > 1e-6;
-    const min = surface + (this.follow ? 0.00012 : closeUp ? Math.min(this.groundClearance(), 0.0012) : this.groundClearance());
-    if (p.length() < min) p.setLength(min);
-  }
-
-  // Zoom and rotate by a share of the height above the surface, so you can zoom smoothly from the
-  // whole Moon down to a few kilometres anywhere, and dragging never races across the ground.
-  tuneControls() {
-    this.groundH = this.terrainHeightAt(this.camera.position);
-    const c = this.controls;
-    // Orbit around the ground's own "up" in a close-up (around the Moon's axis on the globe), so
-    // dragging circles the spot instead of swinging the camera into the ground. Eased while flying.
-    const closeUp = c.target.lengthSq() > 1e-6;
-    const wantUp = closeUp ? c.target.clone().normalize() : new THREE.Vector3(0, 1, 0);
-    const f = this.flight;
-    if (f) {
-      // During a flight, turn from the starting up to the destination's up in step with the flight,
-      // as a rotation (not a blend) so it stays smooth even when up flips right round.
-      const endUp = f.tTo.lengthSq() > 1e-6 ? f.tTo.clone().normalize() : new THREE.Vector3(0, 1, 0);
-      const turn = new THREE.Quaternion().setFromUnitVectors(f.upFrom, endUp);
-      wantUp.copy(f.upFrom).applyQuaternion(new THREE.Quaternion().slerp(turn, f.k ?? 0)).normalize();
-    }
-    if (this.camera.up.angleTo(wantUp) > 1e-5) {
-      this.camera.up.copy(wantUp);
-      c._quat.setFromUnitVectors(this.camera.up, new THREE.Vector3(0, 1, 0));
-      c._quatInverse.copy(c._quat).invert();
-    }
-    // Keep the camera above the spot's horizon in a close-up.
-    c.maxPolarAngle = closeUp ? THREE.MathUtils.degToRad(84) : Math.PI;
-    if (closeUp) {
-      // Close-up: orbit around a point on the ground, zoom toward the mouse, drag sideways with the
-      // right button or two fingers. The pivot follows the ground, so you can travel anywhere.
-      c.zoomSpeed = 1.2;
-      c.rotateSpeed = 0.5;
-      c.enablePan = true;
-      c.screenSpacePanning = true;
-      c.zoomToCursor = true;
-      // How close you may zoom to the spot is where the data runs out; tilting toward the horizon
-      // only has to clear the ground.
-      if (!this.flight) c.minDistance = this.follow ? 0.00008 : this.groundClearance();
-      return;
-    }
-    c.enablePan = false;
-    c.zoomToCursor = false;
-    const ground = 1 + ((this.groundH ?? 0) / R_M) * this.relief;
-    const alt = Math.max(this.camera.position.length() - ground, 1e-4);
-    this.controls.zoomSpeed = Math.log((ground + 0.8 * alt) / (ground + alt)) / Math.log(0.95);
-    this.controls.minDistance = ground + this.groundClearance();
-    this.controls.rotateSpeed = Math.min(0.5, alt * 0.35 + 0.0004);
   }
 
   // Tell the page when the camera is low over ground that is in night at the chosen time.
@@ -822,8 +755,10 @@ export class Globe {
 
   // ---------- mission graphics: route, waypoints, rover, sunlight overlay ----------
 
+  // A point on the ground as drawn (h, the simulator's height, is not used: the drawn mesh is what
+  // must line up on screen).
   groundPoint(lat, lon, h, lift = 0) {
-    return llToWorld(lat, lon, 1 + (h / R_M) * this.relief + lift);
+    return llToWorld(lat, lon, 1 + (this.drawnHeight(lat, lon) / R_M) * this.relief + lift);
   }
 
   // points: [{ lat, lon, h, color: [r, g, b] }]. Drawn twice: solid where visible, faint through hills.
@@ -920,9 +855,8 @@ export class Globe {
   placeRover() {
     if (!this.rover || !this.roverAt) return;
     const r = this.roverAt;
-    const prev = this.rover.position.clone();
     const up = llToWorld(r.lat, r.lon, 1);
-    this.rover.position.copy(up.clone().multiplyScalar(1 + (r.h / R_M) * this.relief));
+    this.rover.position.copy(up.clone().multiplyScalar(1 + (this.drawnHeight(r.lat, r.lon) / R_M) * this.relief));
     // Local frame: north is toward +Y (the Moon's axis) along the surface.
     const east = new THREE.Vector3(0, 1, 0).cross(up);
     if (east.lengthSq() < 1e-12) east.set(0, 0, -1);
@@ -933,12 +867,6 @@ export class Globe {
     const right = forward.clone().cross(up);
     this.rover.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(right, up, forward.clone().negate()));
     if (r.sunAz !== undefined) this.roverPanel.rotation.y = -((r.sunAz - (r.heading ?? 0)) * DEG);
-    if (this.follow && prev.lengthSq() > 0) {
-      // Carry the camera along with the rover, keeping whatever angle and distance the user chose.
-      const delta = this.rover.position.clone().sub(prev);
-      this.camera.position.add(delta);
-      this.controls.target.copy(this.rover.position);
-    }
   }
 
   // Path the rover has driven so far: [{ lat, lon, h }].
@@ -962,20 +890,29 @@ export class Globe {
     this.trail.computeLineDistances();
   }
 
-  // Follow the rover with the camera, starting behind and above it at `distM` metres.
-  setFollow(on, distM = 2500) {
-    this.follow = on;
-    if (!on || !this.roverAt) return;
+  // Camera modes around the rover: 'chase' (behind it, turning with it), 'orbit' (locked on, you turn
+  // the view), 'top' (from above), or off. distM is the starting distance.
+  setFollow(mode, distM = 900) {
+    this.follow = mode && mode !== 'off' ? mode : false;
+    if (!this.follow || !this.roverAt) { this.cam.setFollow(null); return; }
     const r = this.roverAt;
-    const pos = this.rover.position.clone();
-    const up = pos.clone().normalize();
-    const east = new THREE.Vector3(0, 1, 0).cross(up).normalize();
+    const dir = () => llToWorld(this.roverAt.lat, this.roverAt.lon);
+    const fwd = () => this.roverForward();
+    this.cam.setFollow(() => ({ dir: dir(), fwd: this.follow === 'chase' ? fwd() : null }));
+    const tilt = this.follow === 'top' ? 0 : this.follow === 'chase' ? 75 * DEG : 62 * DEG;
+    this.cam.flyTo({ target: llToWorld(r.lat, r.lon), dist: distM / R_M, tilt, heading: this.follow === 'top' ? null : r.heading ?? 0, ms: 1400 });
+  }
+
+  roverForward() {
+    const r = this.roverAt;
+    if (!r) return null;
+    const up = llToWorld(r.lat, r.lon);
+    const east = new THREE.Vector3(0, 1, 0).cross(up);
+    if (east.lengthSq() < 1e-12) east.set(0, 0, -1);
+    east.normalize();
     const north = up.clone().cross(east);
     const h = (r.heading ?? 0) * DEG;
-    const forward = north.multiplyScalar(Math.cos(h)).add(east.multiplyScalar(Math.sin(h)));
-    const d = distM / R_M;
-    const cam = pos.clone().addScaledVector(up, d * 0.4).addScaledVector(forward, -d * 0.92);
-    this.startFlight(cam, pos, 0.00008);
+    return north.multiplyScalar(Math.cos(h)).add(east.multiplyScalar(Math.sin(h)));
   }
 
   // cells: [{ lat, lon, h, lit }] with lit 0..1, cell size in metres. Shows where the Sun shines.
@@ -999,6 +936,7 @@ export class Globe {
   }
 
   placeMission() {
+    for (const pin of this.pins ?? []) pin.mesh.position.copy(this.sitePoint(pin.site, 0.00003));
     const lift = 0.00002; // ~35 m above the ground
     if (this.routeLines?.length && this.routeData) {
       const flat = this.routeData.flatMap((p) => this.groundPoint(p.lat, p.lon, p.h, lift).toArray());
@@ -1019,23 +957,41 @@ export class Globe {
   }
 
   // Fly to frame a set of points (e.g. a route) from above at an angle.
-  frameRoute(points) {
+  frameRoute(points, { tilt = 40 } = {}) {
     if (!points?.length) return;
+    this.cam.setFollow(null);
+    this.follow = false;
     const c = points.reduce((a, p) => a.add(llToWorld(p.lat, p.lon)), new THREE.Vector3()).normalize();
-    const lat = Math.asin(c.y) / DEG, lon = Math.atan2(-c.z, c.x) / DEG;
     let span = 0;
     for (const p of points) span = Math.max(span, llToWorld(p.lat, p.lon).distanceTo(c));
-    const h = this.terrainHeightAt(c);
-    const target = llToWorld(lat, lon, 1 + (h / R_M) * this.relief);
-    const up = Math.max(0.006, span * 2.4);
-    const back = (up / 2) / DEG * (lat > 80 ? -1 : 1);
-    const cam = llToWorld(lat + Math.min(back, 20), lon, 1 + (h / R_M) * this.relief + up);
-    this.startFlight(cam, target, 0.0005);
+    this.cam.flyTo({ target: c, dist: Math.max(0.0025, span * 3.2), tilt: tilt * DEG });
+  }
+
+  // Markers on the ground with an HTML badge: [{ lat, lon, icon, level, title }] (hurdles met).
+  setMarkers(list) {
+    for (const m of this.markers ?? []) m.el.remove();
+    this.markers = (list ?? []).map((m) => {
+      const el = document.createElement('div');
+      el.className = `hz-pin ${m.level ?? ''}${m.label ? '' : ' compact'}`;
+      el.title = m.title ?? '';
+      el.innerHTML = '<span class="hz-ico"></span><span class="hz-txt"></span>';
+      el.querySelector('.hz-ico').textContent = m.icon ?? '!';
+      el.querySelector('.hz-txt').textContent = m.title ?? '';
+      this.labelLayer.appendChild(el);
+      return { ...m, el };
+    });
   }
 
   updatePins() {
     const w = this.canvas.clientWidth, h = this.canvas.clientHeight;
     const cam = this.camera.position;
+    for (const m of this.markers ?? []) {
+      const p = this.groundPoint(m.lat, m.lon, 0, 0.00001);
+      const n = p.clone().normalize();
+      const s = p.clone().project(this.camera);
+      m.el.hidden = cam.clone().sub(p).dot(n) < 0 || s.z > 1 || cam.distanceTo(p) > 0.25;
+      if (!m.el.hidden) m.el.style.transform = `translate(${((s.x + 1) / 2) * w}px, ${((1 - s.y) / 2) * h}px)`;
+    }
     for (const m of this.waypointMeshes ?? []) m.scale.setScalar(cam.distanceTo(m.position) * m.userData.size);
     if (this.rover?.visible) {
       const metres = cam.distanceTo(this.rover.position) * R_M;
