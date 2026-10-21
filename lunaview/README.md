@@ -1,10 +1,33 @@
-# LunaView: lunar rover mission simulator
+# LunaView: a planetarium for the Moon
 
-NASA Space Apps Challenge 2026 project. Before a company sends a rover to the Moon, anywhere on it, LunaView
-simulates the mission on real NASA terrain and the real sky: where the Sun and Earth will be, which ground will be
-in shadow, how cold it gets, how the battery holds up and whether the rover can climb the slopes. It runs the
-mission many times with realistic uncertainty and reports the **chance of success**, **why missions fail** and
-**what would improve the odds** (another landing date, a bigger battery, heaters, a sunnier route).
+NASA Space Apps Challenge 2026 project. LunaView is to the Moon what Stellarium is to Earth: pick any place on
+the Moon and any date and time (past or future), and see the sky and the ground exactly as they are there. All of
+it is computed, not drawn: the Sun, the Earth (with its phase and the side facing you), the planets and 25,723
+catalogue stars, over a landscape built from NASA's LOLA terrain and lit by the real Sun.
+
+**Two views**
+
+- **Standing on the surface** (default): you stand 1.7 m above the real terrain.
+  - Drag to look around and scroll to zoom from 140° to 0.3°.
+  - Click any object for Stellarium-style information: magnitude, RA/Dec, Az/Alt, distance, apparent size and
+    phase.
+  - For the Sun and Earth you also get the next rise and set over the real terrain skyline at that spot.
+  - The ground carries the shadows its own hills and crater walls cast at that moment.
+- **Orbit view**: the whole Moon lit by the real Sun.
+  - ☀ marks where the Sun is overhead and 🌍 where Earth is overhead, with the Moon's phase as seen from Earth
+    and its libration.
+  - Click any spot and choose **Stand here**.
+
+**Like Stellarium**
+
+- Left bar (move the mouse to the left edge): Location (F6), Date and time (F5), Sky and viewing options (F4),
+  Search (F3), Data and accuracy (F2), Help (F1).
+- Bottom bar: constellation lines and names, equatorial and azimuthal grids, ecliptic, ground, cardinal points,
+  Milky Way, labels, sunlight glare, orbit/surface view, night mode, full screen, and time controls.
+- Same keys as Stellarium: J/K/L for time speed, 8 for now, -/= and [/] to step days and weeks, C, V, E, Z, G, Q, M
+  and P for the displays.
+
+The rover mission simulator is still there, as a second page (`simulator.html`, rover icon on the left bar).
 
 ## Run it
 
@@ -16,9 +39,9 @@ npm test               # simulator, terrain and astronomy checks
 npm run build          # static site in dist/ (deploy to Netlify)
 ```
 
-## Using it
+## Rover mission simulator (simulator.html)
 
-The screen works like mission control over a 3D Moon, in three steps shown at the top.
+The second page works like mission control over a 3D Moon, in three steps shown at the top.
 
 1. **Plan route**
    - **Rover**: pick Micro, Mid-size or Large, or edit the specifications: mass, solar array, battery, power
@@ -88,6 +111,29 @@ replay the rover model is drawn larger than life so it stays visible.
 
 ## How it works
 
+Planetarium (`src/sky/`):
+
+- `ephem.js`: the observer on the Moon at any date: position in J2000 equatorial coordinates (astronomy-engine:
+  VSOP87, ELP/MPP02 lunar theory, IAU lunar rotation model), local east/north/up, and the Sun, Earth and planets
+  seen from there.
+  - For each body: altitude, azimuth, RA/Dec, distance, apparent size, magnitude and phase.
+  - For Earth also: its orientation from sidereal time, precession and nutation, the point on Earth facing you,
+    and where on Earth it is noon.
+  - Sun and Earth rise and set over any skyline.
+- `skylayer.js`: the sky: Hipparcos stars (size by magnitude, colour from B-V), constellation lines, the Milky Way,
+  equatorial, ecliptic and azimuthal grids, the Sun with its true 0.53° disc, Earth as a textured sphere (NASA Blue
+  Marble) turned and lit as it really is, and the planets.
+- `landscape.js`: the ground around the observer from NASA LOLA heights out to 150 km.
+  - Includes the Moon's curvature, coloured by the LROC mosaic (399 m tiles) and lit by the Sun.
+  - Shadows are ray-marched toward the Sun through a local height grid, with the Sun's disc for soft edges.
+  - Earthshine on the night side follows Earth's phase and altitude.
+- `surface.js`: standing view (look around, zoom, pick); `app.js`: Stellarium-style interface, time machine,
+  location, search, and orbit view (the 3D globe from `src/globe.js` with the real sky behind it).
+- `tools/build_sky.py` (+ `fetch_sky.sh`, `mw_rings.mjs`): builds `public/sky/` from the Hipparcos catalogue and
+  constellations (d3-celestial, BSD-3) and NASA's Blue Marble.
+
+Rover simulator and globe:
+
 - `src/astro.js`: Sun and Earth direction in the Moon-fixed frame (astronomy-engine + IAU lunar rotation model,
   about 1′ accuracy), converted to elevation and azimuth at the site. Earth parallax is included.
 - `src/sim.js`: the rover simulator (one mission with its hurdles, terrain hazards on a route, and the Monte Carlo wrapper).
@@ -154,3 +200,5 @@ Moon in the simulation, drawn larger than life when the camera is far away so th
 | LOLA LDEM_80S_80M, LDEM_875S_20M (PDS Geosciences Node) | Pole patch, real shadows, site skylines |
 | Planetary ephemerides (via astronomy-engine; DE440 for validation) | Sun and Earth positions |
 | Artemis III candidate regions | Default sites |
+| NASA Blue Marble Next Generation (SVS 3615) | Earth as seen from the Moon |
+| Hipparcos catalogue, IAU star names and constellations (via d3-celestial, BSD-3) | Stars, constellation lines and names, Milky Way outline |

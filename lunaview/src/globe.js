@@ -98,13 +98,14 @@ export class Globe {
     this.raycaster = new THREE.Raycaster();
     canvas.addEventListener('pointerdown', (e) => { this.down = [e.clientX, e.clientY]; });
     canvas.addEventListener('dblclick', (e) => {
+      if (this.override) return;
       clearTimeout(this.clickTimer);
       const hit = this.pickPoint(e);
       if (hit) this.cam.flyTo({ target: llToWorld(hit.lat, hit.lon), dist: Math.max(this.cam.minDist, this.cam.cur.dist * 0.3), ms: 900 });
     });
     canvas.addEventListener('pointerup', (e) => {
       // A click (not a drag), held back a moment so a double-click zooms instead of clicking twice.
-      if (this.down && Math.hypot(e.clientX - this.down[0], e.clientY - this.down[1]) < 5 && e.button === 0) {
+      if (!this.override && this.down && Math.hypot(e.clientX - this.down[0], e.clientY - this.down[1]) < 5 && e.button === 0) {
         const ev = { clientX: e.clientX, clientY: e.clientY };
         clearTimeout(this.clickTimer);
         this.clickTimer = setTimeout(() => this.pickAt(ev), 260);
@@ -135,7 +136,8 @@ export class Globe {
     g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     g.setAttribute('color', new THREE.BufferAttribute(col, 3));
     const m = new THREE.PointsMaterial({ size: 1.6, sizeAttenuation: false, vertexColors: true, transparent: true, depthWrite: false });
-    this.scene.add(new THREE.Points(g, m));
+    this.starField = new THREE.Points(g, m);
+    this.scene.add(this.starField);
   }
 
   buildMoon() {
@@ -732,6 +734,8 @@ export class Globe {
   }
 
   frame() {
+    // Another view (the surface view) can take over the canvas and renderer.
+    if (this.override) { this.override(); return; }
     this.onFrame?.();
     this.cam.update();
     // Re-lay the lines when the zoom changes a lot, so their height above the ground stays right.
@@ -744,7 +748,20 @@ export class Globe {
     if (this.fullLight) this.applyLight();
     this.camera.updateMatrixWorld();
     this.updatePins();
-    this.renderer.render(this.scene, this.camera);
+    if (this.background) {
+      // A sky drawn first (real stars, Sun, Earth), then the Moon over it.
+      const r = this.renderer;
+      r.autoClear = false;
+      r.setClearColor(0x000000, 1);
+      r.clear();
+      this.background(r, this.camera);
+      r.clearDepth();
+      r.render(this.scene, this.camera);
+      r.autoClear = true;
+    } else {
+      this.renderer.render(this.scene, this.camera);
+    }
+    this.afterRender?.();
   }
 
   // Tell the page when the camera is low over ground that is in night at the chosen time.
@@ -1019,7 +1036,7 @@ export class Globe {
       const p = this.groundPoint(m.lat, m.lon, 0, 0.00001);
       const n = p.clone().normalize();
       const s = p.clone().project(this.camera);
-      m.el.hidden = cam.clone().sub(p).dot(n) < 0 || s.z > 1 || cam.distanceTo(p) > 0.25;
+      m.el.hidden = cam.clone().sub(p).dot(n) < 0 || s.z > 1 || cam.distanceTo(p) > (this.markerRange ?? 0.25);
       if (!m.el.hidden) m.el.style.transform = `translate(${((s.x + 1) / 2) * w}px, ${((1 - s.y) / 2) * h}px)`;
     }
     for (const m of this.waypointMeshes ?? []) m.scale.setScalar(cam.distanceTo(m.position) * m.userData.size);

@@ -70,6 +70,7 @@ export class GeoCamera {
     el.style.touchAction = 'none';
     el.addEventListener('contextmenu', (e) => e.preventDefault());
     el.addEventListener('pointerdown', (e) => {
+      if (this.enabled === false) return;
       el.setPointerCapture(e.pointerId);
       this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, button: e.button, mod: e.ctrlKey || e.shiftKey || e.altKey || e.metaKey });
       this.interrupt();
@@ -95,6 +96,7 @@ export class GeoCamera {
     el.addEventListener('pointerup', up);
     el.addEventListener('pointercancel', up);
     el.addEventListener('wheel', (e) => {
+      if (this.enabled === false) return;
       e.preventDefault();
       this.interrupt();
       const px = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY;

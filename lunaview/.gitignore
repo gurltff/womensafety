@@ -3,3 +3,4 @@ dist/
 dist-single/
 .cache/
 __pycache__/
+data/sky_src/
