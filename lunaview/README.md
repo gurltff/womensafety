@@ -133,6 +133,18 @@ Each site starts from a published point and is moved to the highest LOLA ground 
 would aim for a ridge crest. Haworth was dropped: the published point sits low and came out 3% sunlit, so it
 needs a better coordinate before it goes back in. Check all sites against the official challenge resources.
 
+## 3D rover models
+
+| Rover class | Model | Licence |
+|---|---|---|
+| Micro | Rover by Quaternius | CC0 |
+| Mid-size | Space rover by Poly by Google | CC BY 3.0 |
+| Large | Curiosity Rover by Keen Chan | CC BY 3.0 |
+
+They are in `public/models/` (from Poly Pizza). `src/models.js` loads them and scales each to its rover class
+(0.9 m, 1.8 m, 3 m long). They appear in the planner on a turntable and in the rover cards, and they drive on the
+Moon in the simulation, drawn larger than life when the camera is far away so they stay visible.
+
 ## NASA data
 
 | Data | Used for |

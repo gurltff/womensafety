@@ -113,7 +113,7 @@ export class GeoCamera {
     if (this.flight) { this.flight = null; this.goal = this.copy(this.cur); }
   }
 
-  get minDist() { return this.follow ? 0.00006 : this.minDistAt(this.goal.target); }
+  get minDist() { return this.follow ? 250 / 1737400 : this.minDistAt(this.goal.target); }
 
   zoomBy(k) {
     this.goal.dist = THREE.MathUtils.clamp(this.goal.dist * k, Math.min(this.minDist, this.goal.dist), MAX_DIST);

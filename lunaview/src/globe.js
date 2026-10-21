@@ -2,6 +2,7 @@
 // high-detail south-pole patch from the LOLA 80 m polar DEM that casts real shadows from the real Sun.
 import * as THREE from 'three';
 import { GeoCamera } from './camera.js';
+import { roverModel } from './models.js';
 import { Line2 } from 'three/examples/jsm/lines/Line2.js';
 import { LineGeometry } from 'three/examples/jsm/lines/LineGeometry.js';
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
@@ -733,6 +734,8 @@ export class Globe {
   frame() {
     this.onFrame?.();
     this.cam.update();
+    // Re-lay the lines when the zoom changes a lot, so their height above the ground stays right.
+    if (this.liftAt && Math.abs(Math.log(this.cam.cur.dist / this.liftAt)) > 0.7 && !this.cam.flight) this.placeMission();
     this.checkNight();
     this.frameNo = (this.frameNo ?? 0) + 1;
     if (this.frameNo % 8 === 0) this.updateDetail();
@@ -754,6 +757,8 @@ export class Globe {
   }
 
   // ---------- mission graphics: route, waypoints, rover, sunlight overlay ----------
+
+  lineLift() { return THREE.MathUtils.clamp(this.cam.cur.dist * 0.008, 1.5 / R_M, 35 / R_M); }
 
   // A point on the ground as drawn (h, the simulator's height, is not used: the drawn mesh is what
   // must line up on screen).
@@ -827,6 +832,9 @@ export class Globe {
     const dish = add(new THREE.SphereGeometry(0.22, 16, 8, 0, Math.PI * 2, 0, Math.PI / 3), white, -0.4, 1.0, -0.6);
     dish.rotation.x = -0.6;
     g.add(model);
+    this.roverModel = model;
+    this.roverLen = 2;
+    this.roverWheelR = 0.26;
     // A ring on the ground in the rover's status colour, so it can be found from far away.
     const ring = new THREE.Mesh(new THREE.RingGeometry(1.5, 1.9, 32), new THREE.MeshBasicMaterial({ color: 0x6fd39a, transparent: true, opacity: 0.85, side: THREE.DoubleSide, depthTest: false }));
     ring.rotation.x = -Math.PI / 2;
@@ -835,16 +843,36 @@ export class Globe {
     g.add(ring);
     this.roverRing = ring;
     g.renderOrder = 5;
+    g.visible = false;
     this.scene.add(g);
     return g;
+  }
+
+  // Swap in one of the rover models (see models.js): 'micro', 'mid' or 'large'.
+  async setRoverModel(id) {
+    if (!this.rover) this.rover = this.buildRover();
+    if (this.roverModelId === id) return;
+    this.roverModelId = id;
+    let m;
+    try { m = await roverModel(id); } catch { return; }
+    if (this.roverModelId !== id) return;
+    this.rover.remove(this.roverModel);
+    this.roverModel = m.object;
+    this.rover.add(m.object);
+    this.roverWheels = m.wheels;
+    this.roverPanel = null;
+    this.roverLen = m.spec.lengthM;
+    this.roverWheelR = m.size.y * 0.2;
+    this.roverLoaded = true;
+    this.roverRing.scale.setScalar(Math.max(m.size.x, m.size.z) / 3);
   }
 
   // where: { lat, lon, h, heading (deg), sunAz (deg), status colour, odometer (m) } or null.
   setRover(where) {
     if (!this.rover) this.rover = this.buildRover();
     if (where && this.roverAt && where.odometer !== undefined && this.roverAt.odometer !== undefined) {
-      const turn = (where.odometer - this.roverAt.odometer) / 0.26;
-      for (const w of this.roverWheels) w.rotation.x += turn;
+      const turn = (where.odometer - this.roverAt.odometer) / this.roverWheelR;
+      for (const w of this.roverWheels) { if (this.roverLoaded) w.rotateX(turn); else w.rotation.x += turn; }
     }
     this.roverAt = where;
     this.rover.visible = !!where;
@@ -866,7 +894,7 @@ export class Globe {
     const forward = north.clone().multiplyScalar(Math.cos(h)).add(east.clone().multiplyScalar(Math.sin(h)));
     const right = forward.clone().cross(up);
     this.rover.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(right, up, forward.clone().negate()));
-    if (r.sunAz !== undefined) this.roverPanel.rotation.y = -((r.sunAz - (r.heading ?? 0)) * DEG);
+    if (r.sunAz !== undefined && this.roverPanel) this.roverPanel.rotation.y = -((r.sunAz - (r.heading ?? 0)) * DEG);
   }
 
   // Path the rover has driven so far: [{ lat, lon, h }].
@@ -883,7 +911,7 @@ export class Globe {
     this.trailData = points;
     this.trail.visible = !!points && points.length > 1;
     if (!this.trail.visible) return;
-    const flat = points.flatMap((p) => this.groundPoint(p.lat, p.lon, p.h, 0.000025).toArray());
+    const flat = points.flatMap((p) => this.groundPoint(p.lat, p.lon, p.h, this.lineLift() * 1.2).toArray());
     this.trail.geometry.dispose();
     this.trail.geometry = new LineGeometry();
     this.trail.geometry.setPositions(flat);
@@ -937,7 +965,9 @@ export class Globe {
 
   placeMission() {
     for (const pin of this.pins ?? []) pin.mesh.position.copy(this.sitePoint(pin.site, 0.00003));
-    const lift = 0.00002; // ~35 m above the ground
+    // Lines float a little above the ground so they don't sink into it: ~1% of the viewing distance.
+    const lift = this.lineLift();
+    this.liftAt = this.cam.cur.dist;
     if (this.routeLines?.length && this.routeData) {
       const flat = this.routeData.flatMap((p) => this.groundPoint(p.lat, p.lon, p.h, lift).toArray());
       for (const line of this.routeLines) {
@@ -995,7 +1025,7 @@ export class Globe {
     for (const m of this.waypointMeshes ?? []) m.scale.setScalar(cam.distanceTo(m.position) * m.userData.size);
     if (this.rover?.visible) {
       const metres = cam.distanceTo(this.rover.position) * R_M;
-      this.roverScale = Math.max(1, (metres * 0.03) / 2); // enlarged so it stays ~3% of the view
+      this.roverScale = Math.max(1, (metres * 0.035) / this.roverLen); // enlarged so it stays ~3.5% of the view
       this.rover.scale.setScalar(this.roverScale / R_M);
     }
     // Sites sit within a few degrees of the pole, so names overlap until the camera is close.

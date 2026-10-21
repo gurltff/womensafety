@@ -6,6 +6,8 @@ import { Terrain, distance, bearing } from './terrain.js';
 import { prepareRoute, routeHazards, pointAt, ephemeris, environment, simulate, monteCarlo } from './sim.js';
 import { sunlightMap, planRoute, boxAround } from './planner.js';
 import { ROVERS, ROVER_FIELDS } from './rovers.js';
+import { MODELS } from './models.js';
+import { RoverStage, thumbnail } from './preview.js';
 
 const $ = (id) => document.getElementById(id);
 const HOUR = 3600 * 1000;
@@ -18,6 +20,7 @@ const state = {
   mode: 'plan',
   rover: { ...ROVERS[1] },
   roverId: ROVERS[1].id,
+  modelId: ROVERS[1].id, // which 3D model to show: the last preset chosen
   waypoints: [],
   landingName: '',
   start: new Date(Date.UTC(2026, 10, 20)),
@@ -380,8 +383,12 @@ for (const group of ['South pole landing sites', 'Famous places']) {
 fStart.addEventListener('change', () => { const p = ALL_PLACES.find((x) => x.id === fStart.value); if (p) setLanding(p, p.name); });
 
 // ---------- rover ----------
-const ROVER_ART = (s) => `<svg viewBox="0 0 60 30" aria-hidden="true"><g transform="translate(30 30) scale(${s}) translate(-30 -30)">
-  <rect x="14" y="12" width="32" height="8" rx="2"/><path d="M38 12V5h10v4H38"/><circle cx="18" cy="24" r="4"/><circle cx="30" cy="24" r="4"/><circle cx="42" cy="24" r="4"/><path d="M20 12l-4-5"/></g></svg>`;
+// Pictures of the 3D models, rendered once in the browser.
+const thumbs = {};
+const thumbReady = Promise.all(ROVERS.map(async (r) => {
+  try { thumbs[r.id] = await thumbnail(r.id); } catch { thumbs[r.id] = ''; }
+}));
+const CLASS = { micro: ['Micro', 'CLPS payload class, ~1 m'], mid: ['Mid-size', 'Science rover, ~2 m'], large: ['Large', 'Flagship class, ~3 m'] };
 const roverCards = $('roverCards');
 ROVERS.forEach((r, i) => {
   const b = document.createElement('button');
@@ -389,8 +396,9 @@ ROVERS.forEach((r, i) => {
   b.className = 'rover-card';
   b.setAttribute('role', 'radio');
   b.dataset.id = r.id;
-  b.innerHTML = `${ROVER_ART([0.62, 0.82, 1][i])}<b>${['Micro', 'Mid-size', 'Large'][i]}</b><small>${r.massKg} kg · ${r.batteryWh} Wh · ${r.solarW} W solar</small>`;
-  b.addEventListener('click', () => { state.rover = { ...r }; state.roverId = r.id; syncRoverForm(); markStale(); routeChanged(); });
+  b.innerHTML = `<img alt=""><b>${CLASS[r.id][0]}</b><small>${r.massKg} kg · ${r.batteryWh} Wh</small>`;
+  thumbReady.then(() => { b.querySelector('img').src = thumbs[r.id]; });
+  b.addEventListener('click', () => { state.rover = { ...r }; state.roverId = r.id; state.modelId = r.id; syncRoverForm(); markStale(); routeChanged(); });
   roverCards.appendChild(b);
 });
 const specGrid = $('specGrid');
@@ -405,10 +413,21 @@ for (const [key, label, unit, step] of ROVER_FIELDS) {
   });
   specGrid.appendChild(wrap);
 }
-function makeCustom() { state.roverId = 'custom'; state.rover.name = 'Custom rover'; syncRoverCards(); }
+function makeCustom() { state.roverId = 'custom'; state.rover.name = 'Custom rover'; syncRoverCards(); syncRoverStage(); }
 function syncRoverCards() { for (const b of roverCards.children) b.setAttribute('aria-checked', String(b.dataset.id === state.roverId)); }
+const roverStage = new RoverStage($('roverStage'));
+function syncRoverStage() {
+  roverStage.show(state.modelId);
+  globe.setRoverModel(state.modelId);
+  const r = state.rover;
+  $('rsName').textContent = state.roverId === 'custom' ? 'Custom rover' : `${CLASS[state.modelId][0]} rover`;
+  $('rsClass').textContent = state.roverId === 'custom' ? `Your specifications, shown as the ${CLASS[state.modelId][0].toLowerCase()} model` : CLASS[state.modelId][1];
+  $('rsChips').innerHTML = [['Mass', `${r.massKg} kg`], ['Battery', `${r.batteryWh} Wh`], ['Solar', `${r.solarW} W`], ['Speed', `${r.speedMh} m/h`], ['Slope', `${r.maxSlopeDeg}°`]]
+    .map(([k, v]) => `<span><i>${k}</i>${v}</span>`).join('');
+}
 function syncRoverForm() {
   syncRoverCards();
+  syncRoverStage();
   for (const [key] of ROVER_FIELDS) $(`r_${key}`).value = state.rover[key];
   $('fPanel').value = state.rover.panel;
   $('fComms').checked = !!state.rover.needsComms;
@@ -497,7 +516,7 @@ async function launch() {
     if (job !== simJob) return;
     compStep(4, `${nominal.hurdles.length} hurdles in the planned run`, 1);
     await new Promise((res) => setTimeout(res, 350));
-    state.result = { nominal, mc, args, rover: { ...state.rover }, waypoints: state.waypoints.slice(), landingName: state.landingName, planned: state.planned, slip: state.slip, tips: null };
+    state.result = { nominal, mc, args, rover: { ...state.rover }, modelId: state.modelId, waypoints: state.waypoints.slice(), landingName: state.landingName, planned: state.planned, slip: state.slip, tips: null };
     state.stale = false;
     replay.t = 0;
     replay.ended = false;
@@ -537,6 +556,10 @@ function camDistance() {
 
 function startRun() {
   const n = state.result.nominal;
+  globe.setRoverModel(state.result.modelId);
+  $('tmImg').src = thumbs[state.result.modelId] ?? '';
+  $('tmName').textContent = state.result.rover.name.split(' (')[0];
+  $('tmWhere').textContent = state.result.landingName;
   globe.setRoute(state.result.args.route.pts.map((p) => ({ lat: p.lat, lon: p.lon, h: p.h, color: [0.75, 0.78, 0.85] })));
   globe.setOverlay(null);
   setToolOn('map', false);
@@ -849,10 +872,11 @@ function renderDebrief() {
 
   $('debriefBody').innerHTML = `
     <div class="db-hero">
+      ${thumbs[res.modelId] ? `<img class="db-rover" src="${thumbs[res.modelId]}" alt="">` : '<span></span>'}
       <div class="ring" role="img" aria-label="${Math.round(mc.rate * 100)} percent of simulated missions succeeded">
         <svg viewBox="0 0 132 132"><circle cx="66" cy="66" r="56" fill="none" stroke="var(--shadow)" stroke-width="12"/>
           ${mc.rate > 0 ? `<circle cx="66" cy="66" r="56" fill="none" stroke="var(${col})" stroke-width="12" stroke-linecap="round" stroke-dasharray="${C * mc.rate} ${C}"/>` : ''}</svg>
-        <div class="rv"><div><b>${Math.round(mc.rate * 100)}%</b><small>chance of success</small></div></div>
+        <div class="rv"><div><b>${Math.round(mc.rate * 100)}%</b><small>success</small></div></div>
       </div>
       <div>
         <h2 style="color:var(${n.success ? '--ok' : '--crit'})">${n.success ? 'Mission accomplished' : n.cause === 'battery' ? 'Rover lost' : n.cause === 'slope' ? 'Route blocked' : 'Mission incomplete'}</h2>
@@ -1170,6 +1194,7 @@ document.addEventListener('keydown', (e) => {
   if (e.target.closest?.('input, select, textarea')) return;
   if (e.key === ' ' && state.mode === 'run') { e.preventDefault(); setPlaying(!replay.playing); }
   if (e.key === 'Escape' && !$('stand').hidden) $('stand').hidden = true;
+  if (e.key === 'Escape' && !$('welcome').hidden) closeWelcome();
   if ((e.key === 'Backspace' || e.key === 'Delete') && state.mode === 'plan' && state.waypoints.length > 1) { state.waypoints.pop(); routeChanged(); }
 });
 
@@ -1179,9 +1204,33 @@ Object.assign(window.lunaview, { replay, seek, setPlaying, setMode });
 function setTime(d) { globe.setSunDirection(eph15(d.getTime()).sun); }
 globe.onFrame = () => { if (state.mode === 'run') replayFrame(false); };
 
+// ============ welcome ============
+let welcomeStage = null;
+function showWelcome() {
+  $('welcome').hidden = false;
+  welcomeStage ??= new RoverStage($('welcomeStage'));
+  welcomeStage.lift = 0;
+  const order = ['large', 'mid', 'micro'];
+  let k = 0;
+  welcomeStage.show(order[0]);
+  clearInterval(showWelcome.timer);
+  showWelcome.timer = setInterval(() => { if ($('welcome').hidden) return clearInterval(showWelcome.timer); welcomeStage.show(order[++k % 3]); }, 4500);
+}
+function closeWelcome() {
+  $('welcome').hidden = true;
+  try { localStorage.setItem('lunaview-welcomed', '1'); } catch { /* private mode */ }
+}
+$('wStart').addEventListener('click', closeWelcome);
+$('wExample').addEventListener('click', () => { closeWelcome(); loadExample(); });
+$('welcome').addEventListener('click', (e) => { if (e.target === $('welcome')) closeWelcome(); });
+$('modelCredit').textContent = `3D models: ${Object.values(MODELS).map((m) => m.credit).join(' · ')}.`;
+
 // ============ start ============
 syncRoverForm();
 syncTiming();
 setTime(state.start);
 renderWaypoints();
 renderInstructions();
+let welcomed = false;
+try { welcomed = localStorage.getItem('lunaview-welcomed') === '1'; } catch { /* private mode */ }
+if (!welcomed) showWelcome();

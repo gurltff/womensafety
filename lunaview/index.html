@@ -36,6 +36,15 @@
       <div class="panel-scroll">
         <section class="card">
           <h2><span class="num">1</span>Choose the rover</h2>
+          <div class="rover-stage">
+            <canvas id="roverStage" aria-label="3D model of the selected rover. Drag to turn it."></canvas>
+            <div class="rs-info">
+              <b id="rsName">Mid-size rover</b>
+              <span id="rsClass" class="hint"></span>
+            </div>
+            <div class="rs-chips" id="rsChips"></div>
+            <span class="rs-drag">Drag to turn</span>
+          </div>
           <div class="rover-cards" id="roverCards" role="radiogroup" aria-label="Rover"></div>
           <details class="specs">
             <summary>Edit specifications</summary>
@@ -47,6 +56,7 @@
             </select>
             <label class="check"><input type="checkbox" id="fComms"> Needs Earth in view to drive</label>
             <p class="hint">Presets are illustrative. Enter your rover's real numbers.</p>
+            <p class="hint small" id="modelCredit"></p>
           </details>
         </section>
 
@@ -126,6 +136,7 @@
 
     <!-- ============ 2. RUN ============ -->
     <section class="telemetry" id="telemetry" hidden aria-label="Rover telemetry">
+      <div class="tm-rover"><img id="tmImg" alt=""><div><b id="tmName">Rover</b><span class="hint small" id="tmWhere"></span></div></div>
       <div class="tm-head">
         <div><span class="tm-day" id="tmDay">Day 1</span><span class="tm-clock mono" id="tmClock">00:00 UTC</span></div>
         <span class="badge" id="tmState">Driving</span>
@@ -202,6 +213,27 @@
       </div>
       <div class="stand-bottom">
         <div class="readout" id="standReadout"></div>
+      </div>
+    </section>
+
+    <!-- Welcome -->
+    <section class="welcome" id="welcome" hidden aria-labelledby="wTitle">
+      <div class="w-card">
+        <div class="w-art"><canvas id="welcomeStage" aria-hidden="true"></canvas></div>
+        <div class="w-body">
+          <p class="w-kicker">NASA Space Apps Challenge 2026</p>
+          <h2 id="wTitle">Rehearse your rover mission before it flies</h2>
+          <p>Draw a route anywhere on the Moon, then watch your rover drive it on real NASA terrain under the real Sun. LunaView simulates sunlight, shadows, temperature, battery, slopes and Earth contact, and tells you the chance of success and every hurdle along the way.</p>
+          <ol class="w-steps">
+            <li><b>1</b><span><strong>Plan</strong> Pick a rover, click the Moon to land, click again to add waypoints.</span></li>
+            <li><b>2</b><span><strong>Simulate</strong> Watch the drive with live telemetry and a mission log.</span></li>
+            <li><b>3</b><span><strong>Debrief</strong> See every hurdle, the odds, and how to improve them.</span></li>
+          </ol>
+          <div class="row wrap">
+            <button class="launch small" type="button" id="wStart">Start planning</button>
+            <button class="btn" type="button" id="wExample">Try an example mission</button>
+          </div>
+        </div>
       </div>
     </section>
 
