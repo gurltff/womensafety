@@ -437,7 +437,7 @@ function renderReport() {
   $('toCompare').addEventListener('click', () => addCompare(state.result));
 }
 
-const CH = { left: 46, right: 10, top: 10 };
+const CH = { left: 46, right: 44, top: 10 };
 function drawChart(canvas = $('simChart'), result = state.result, { compact = false, cursor = state.pbIndex } = {}) {
   if (!canvas) return;
   const tl = result.nominal.timeline;
@@ -490,10 +490,18 @@ function drawChart(canvas = $('simChart'), result = state.result, { compact = fa
   ctx.fillStyle = col('--ink-dim');
   ctx.font = `500 10.5px ${col('--font-mono')}`;
   ctx.textAlign = 'right';
+  // Battery on the left axis, ground temperature on the right.
+  ctx.fillStyle = col('--ok');
   ctx.fillText('100%', L - 6, yB(1) + 4);
+  ctx.fillText('50%', L - 6, yB(0.5) + 4);
   ctx.fillText('0%', L - 6, yB(0) + 4);
-  ctx.fillText('+130°', L - 6, lineTop + 14);
-  ctx.fillText('−200°', L - 6, yB(0) - 6);
+  ctx.fillStyle = col('--crit');
+  ctx.textAlign = 'left';
+  ctx.fillText('+130°C', L + w + 4, yT(130) + 9);
+  ctx.fillText('0°C', L + w + 4, yT(0) + 4);
+  ctx.fillText('−200°C', L + w + 4, yT(-200) - 2);
+  ctx.fillStyle = col('--ink-dim');
+  ctx.textAlign = 'right';
   ['SUN', 'EARTH', 'ROVER'].forEach((t, row) => ctx.fillText(t, L - 6, bandY + row * (bandH + 3) + 10));
   ctx.textAlign = 'center';
   const days = result.nominal.days, every = days > 20 ? 5 : days > 10 ? 2 : 1;

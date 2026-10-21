@@ -256,6 +256,13 @@ h3 { margin: 22px 0 8px; font: 600 13px var(--font-mono); letter-spacing: 0.08em
   .drawer.left { width: 400px; }
 }
 body.drawing #globe { cursor: crosshair; }
+/* With the forecast open on a laptop screen, the rover chip makes way for playback and tools. */
+@media (min-width: 900px) and (max-width: 1599px) {
+  body.report-open .site-chip, body.report-open .brand { display: none; }
+  body.report-open .bottom { grid-template-columns: minmax(0, 1fr) auto; }
+  body.report-open .center-stack { grid-column: 1; width: 100%; }
+  body.report-open .time-chip { grid-column: 2; }
+}
 
 fieldset { margin: 0 0 6px; padding: 14px 0 6px; border: 0; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 legend { display: flex; align-items: center; gap: 10px; padding: 0; font: 700 17px/1 var(--font-display); letter-spacing: 0.05em; text-transform: uppercase; }
