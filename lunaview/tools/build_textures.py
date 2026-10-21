@@ -62,7 +62,7 @@ def sim_tiles():
 
 
 GLOBE_COLS, GLOBE_ROWS = 16, 8  # 22.5 degree tiles
-GLOBE_GRID = 257               # vertices per tile side (~2.6 km at the equator)
+GLOBE_GRID = 721               # height samples per tile side (~950 m at the equator); the globe draws every 3rd
 
 
 def globe_tiles():

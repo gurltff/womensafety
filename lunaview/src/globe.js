@@ -496,8 +496,9 @@ export class Globe {
       };
       const lat0 = 90 - r * 22.5, lon0 = -180 + c * 22.5;
       t.mesh = this.terrainMesh({
-        n: G, heightAt: (i, j) => heights[i * G + j],
-        dirAt: (i, j) => llToWorld(lat0 - (22.5 * i) / (G - 1), lon0 + (22.5 * j) / (G - 1), 1),
+        // Height tiles hold 721 samples a side for the simulator; the mesh uses every 3rd (241).
+        n: Math.floor((G - 1) / 3) + 1, heightAt: (i, j) => heights[i * 3 * G + j * 3],
+        dirAt: (i, j) => llToWorld(lat0 - (22.5 * i * 3) / (G - 1), lon0 + (22.5 * j * 3) / (G - 1), 1),
         skirtM: 1500, material,
       });
       t.mesh.visible = false;
@@ -701,7 +702,7 @@ export class Globe {
     this.camera.aspect = w / h;
     this.camera.fov = w < 640 ? 50 : 35;
     this.camera.updateProjectionMatrix();
-    for (const l of this.routeLines ?? []) l.material.resolution.set(w, h);
+    for (const l of [...(this.routeLines ?? []), this.trail].filter(Boolean)) l.material.resolution.set(w, h);
   }
 
   frame() {
@@ -760,7 +761,7 @@ export class Globe {
     this.groundH = this.terrainHeightAt(p);
     const surface = 1 + (this.groundH / R_M) * this.relief;
     const closeUp = this.controls.target.lengthSq() > 1e-6;
-    const min = surface + (closeUp ? Math.min(this.groundClearance(), 0.0012) : this.groundClearance());
+    const min = surface + (this.follow ? 0.00012 : closeUp ? Math.min(this.groundClearance(), 0.0012) : this.groundClearance());
     if (p.length() < min) p.setLength(min);
   }
 
@@ -798,7 +799,7 @@ export class Globe {
       c.zoomToCursor = true;
       // How close you may zoom to the spot is where the data runs out; tilting toward the horizon
       // only has to clear the ground.
-      if (!this.flight) c.minDistance = this.groundClearance();
+      if (!this.flight) c.minDistance = this.follow ? 0.00008 : this.groundClearance();
       return;
     }
     c.enablePan = false;
@@ -860,19 +861,121 @@ export class Globe {
     this.placeMission();
   }
 
+  // A rover model in metres (about 2 m long): +Y up, -Z forward. Lit by the real Sun.
+  buildRover() {
+    const g = new THREE.Group();
+    const model = new THREE.Group();
+    const white = new THREE.MeshStandardMaterial({ color: 0xd9dbe0, roughness: 0.6, metalness: 0.2 });
+    const dark = new THREE.MeshStandardMaterial({ color: 0x2a2d33, roughness: 0.9 });
+    const gold = new THREE.MeshStandardMaterial({ color: 0xc9a24a, roughness: 0.4, metalness: 0.6 });
+    const cells = new THREE.MeshStandardMaterial({ color: 0x1d3f7a, roughness: 0.3, metalness: 0.5, side: THREE.DoubleSide });
+    const add = (geo, mat, x, y, z, parent = model) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.castShadow = true; parent.add(m); return m; };
+    add(new THREE.BoxGeometry(1.3, 0.35, 1.8), white, 0, 0.55, 0);
+    add(new THREE.BoxGeometry(1.1, 0.12, 1.5), gold, 0, 0.78, 0);
+    this.roverWheels = [];
+    for (const x of [-0.78, 0.78]) {
+      for (const z of [-0.7, 0, 0.7]) {
+        const w = add(new THREE.CylinderGeometry(0.26, 0.26, 0.2, 16), dark, x, 0.26, z);
+        w.rotation.z = Math.PI / 2;
+        this.roverWheels.push(w);
+      }
+    }
+    // Mast with a solar panel that turns to face the Sun.
+    add(new THREE.CylinderGeometry(0.04, 0.04, 0.9, 8), white, 0, 1.25, 0.55);
+    this.roverPanel = new THREE.Group();
+    this.roverPanel.position.set(0, 1.55, 0.55);
+    model.add(this.roverPanel);
+    add(new THREE.BoxGeometry(1.5, 0.9, 0.04), cells, 0, 0.1, 0, this.roverPanel);
+    // Camera mast and antenna at the front.
+    add(new THREE.CylinderGeometry(0.03, 0.03, 0.6, 8), white, 0.4, 1.05, -0.7);
+    add(new THREE.BoxGeometry(0.3, 0.15, 0.15), dark, 0.4, 1.4, -0.75);
+    const dish = add(new THREE.SphereGeometry(0.22, 16, 8, 0, Math.PI * 2, 0, Math.PI / 3), white, -0.4, 1.0, -0.6);
+    dish.rotation.x = -0.6;
+    g.add(model);
+    // A ring on the ground in the rover's status colour, so it can be found from far away.
+    const ring = new THREE.Mesh(new THREE.RingGeometry(1.5, 1.9, 32), new THREE.MeshBasicMaterial({ color: 0x6fd39a, transparent: true, opacity: 0.85, side: THREE.DoubleSide, depthTest: false }));
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.y = 0.05;
+    ring.renderOrder = 6;
+    g.add(ring);
+    this.roverRing = ring;
+    g.renderOrder = 5;
+    this.scene.add(g);
+    return g;
+  }
+
+  // where: { lat, lon, h, heading (deg), sunAz (deg), status colour, odometer (m) } or null.
   setRover(where) {
-    if (!this.rover) {
-      const body = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.7, 1), new THREE.MeshBasicMaterial({ color: 0x6fd39a, depthTest: false }));
-      const ring = new THREE.Mesh(new THREE.RingGeometry(1.6, 2, 24), new THREE.MeshBasicMaterial({ color: 0x6fd39a, transparent: true, opacity: 0.7, side: THREE.DoubleSide, depthTest: false }));
-      this.rover = new THREE.Group();
-      this.rover.add(body, ring);
-      this.rover.renderOrder = 5;
-      body.renderOrder = ring.renderOrder = 5;
-      this.scene.add(this.rover);
+    if (!this.rover) this.rover = this.buildRover();
+    if (where && this.roverAt && where.odometer !== undefined && this.roverAt.odometer !== undefined) {
+      const turn = (where.odometer - this.roverAt.odometer) / 0.26;
+      for (const w of this.roverWheels) w.rotation.x += turn;
     }
     this.roverAt = where;
     this.rover.visible = !!where;
-    this.placeMission();
+    if (where?.colour) this.roverRing.material.color.set(where.colour);
+    this.placeRover();
+  }
+
+  placeRover() {
+    if (!this.rover || !this.roverAt) return;
+    const r = this.roverAt;
+    const prev = this.rover.position.clone();
+    const up = llToWorld(r.lat, r.lon, 1);
+    this.rover.position.copy(up.clone().multiplyScalar(1 + (r.h / R_M) * this.relief));
+    // Local frame: north is toward +Y (the Moon's axis) along the surface.
+    const east = new THREE.Vector3(0, 1, 0).cross(up);
+    if (east.lengthSq() < 1e-12) east.set(0, 0, -1);
+    east.normalize();
+    const north = up.clone().cross(east);
+    const h = (r.heading ?? 0) * DEG;
+    const forward = north.clone().multiplyScalar(Math.cos(h)).add(east.clone().multiplyScalar(Math.sin(h)));
+    const right = forward.clone().cross(up);
+    this.rover.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(right, up, forward.clone().negate()));
+    if (r.sunAz !== undefined) this.roverPanel.rotation.y = -((r.sunAz - (r.heading ?? 0)) * DEG);
+    if (this.follow && prev.lengthSq() > 0) {
+      // Carry the camera along with the rover, keeping whatever angle and distance the user chose.
+      const delta = this.rover.position.clone().sub(prev);
+      this.camera.position.add(delta);
+      this.controls.target.copy(this.rover.position);
+    }
+  }
+
+  // Path the rover has driven so far: [{ lat, lon, h }].
+  setTrail(points) {
+    if (!this.trail) {
+      const m = new LineMaterial({ color: 0x4fc9c0, linewidth: 4, transparent: true, opacity: 0.95, depthTest: false, worldUnits: false });
+      m.resolution.set(this.canvas.clientWidth, this.canvas.clientHeight);
+      this.trail = new Line2(new LineGeometry(), m);
+      this.trail.renderOrder = 4;
+      this.trail.frustumCulled = false;
+      this.scene.add(this.trail);
+      (this.routeLines ??= []);
+    }
+    this.trailData = points;
+    this.trail.visible = !!points && points.length > 1;
+    if (!this.trail.visible) return;
+    const flat = points.flatMap((p) => this.groundPoint(p.lat, p.lon, p.h, 0.000025).toArray());
+    this.trail.geometry.dispose();
+    this.trail.geometry = new LineGeometry();
+    this.trail.geometry.setPositions(flat);
+    this.trail.computeLineDistances();
+  }
+
+  // Follow the rover with the camera, starting behind and above it at `distM` metres.
+  setFollow(on, distM = 2500) {
+    this.follow = on;
+    if (!on || !this.roverAt) return;
+    const r = this.roverAt;
+    const pos = this.rover.position.clone();
+    const up = pos.clone().normalize();
+    const east = new THREE.Vector3(0, 1, 0).cross(up).normalize();
+    const north = up.clone().cross(east);
+    const h = (r.heading ?? 0) * DEG;
+    const forward = north.multiplyScalar(Math.cos(h)).add(east.multiplyScalar(Math.sin(h)));
+    const d = distM / R_M;
+    const cam = pos.clone().addScaledVector(up, d * 0.4).addScaledVector(forward, -d * 0.92);
+    this.startFlight(cam, pos, 0.00008);
   }
 
   // cells: [{ lat, lon, h, lit }] with lit 0..1, cell size in metres. Shows where the Sun shines.
@@ -905,11 +1008,8 @@ export class Globe {
       }
     }
     for (const m of this.waypointMeshes ?? []) m.position.copy(this.groundPoint(m.userData.lat, m.userData.lon, m.userData.h, lift));
-    if (this.rover && this.roverAt) {
-      const r = this.roverAt;
-      this.rover.position.copy(this.groundPoint(r.lat, r.lon, r.h, lift));
-      this.rover.lookAt(this.rover.position.clone().multiplyScalar(2));
-    }
+    this.placeRover();
+    if (this.trailData) this.setTrail(this.trailData);
     if (this.overlay) {
       const pos = this.overlay.geometry.attributes.position;
       this.overlayData.forEach((c, i) => { const v = this.groundPoint(c.lat, c.lon, c.h, lift * 0.5); pos.setXYZ(i, v.x, v.y, v.z); });
@@ -937,7 +1037,11 @@ export class Globe {
     const w = this.canvas.clientWidth, h = this.canvas.clientHeight;
     const cam = this.camera.position;
     for (const m of this.waypointMeshes ?? []) m.scale.setScalar(cam.distanceTo(m.position) * m.userData.size);
-    if (this.rover?.visible) this.rover.scale.setScalar(cam.distanceTo(this.rover.position) * 0.006);
+    if (this.rover?.visible) {
+      const metres = cam.distanceTo(this.rover.position) * R_M;
+      this.roverScale = Math.max(1, (metres * 0.03) / 2); // enlarged so it stays ~3% of the view
+      this.rover.scale.setScalar(this.roverScale / R_M);
+    }
     // Sites sit within a few degrees of the pole, so names overlap until the camera is close.
     const showNames = cam.length() < 3;
     this.polarRing.visible = this.showRing !== false && cam.length() > 1.6;

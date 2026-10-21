@@ -32,3 +32,21 @@ export function parseCoords(text) {
   if (lon > 180) lon -= 360;
   return { lat, lon };
 }
+
+// Well-known places to start a mission anywhere on the Moon (approximate published coordinates).
+export const PLACES = [
+  { id: 'apollo-11', name: 'Apollo 11, Sea of Tranquillity', lat: 0.674, lon: 23.473 },
+  { id: 'apollo-12', name: 'Apollo 12, Ocean of Storms', lat: -3.012, lon: -23.422 },
+  { id: 'apollo-14', name: 'Apollo 14, Fra Mauro', lat: -3.645, lon: -17.471 },
+  { id: 'apollo-15', name: 'Apollo 15, Hadley Rille', lat: 26.132, lon: 3.634 },
+  { id: 'apollo-16', name: 'Apollo 16, Descartes Highlands', lat: -8.973, lon: 15.5 },
+  { id: 'apollo-17', name: 'Apollo 17, Taurus-Littrow', lat: 20.191, lon: 30.772 },
+  { id: 'lunokhod-1', name: 'Lunokhod 1, Sea of Rains', lat: 38.24, lon: -35.0 },
+  { id: 'lunokhod-2', name: 'Lunokhod 2, Le Monnier crater', lat: 25.85, lon: 30.45 },
+  { id: 'change-3', name: "Chang'e 3 / Yutu, Sea of Rains", lat: 44.12, lon: -19.51 },
+  { id: 'change-4', name: "Chang'e 4 / Yutu-2, Von Kármán (far side)", lat: -45.44, lon: 177.6 },
+  { id: 'chandrayaan-3', name: 'Chandrayaan-3 / Pragyan, near south pole', lat: -69.37, lon: 32.32 },
+  { id: 'slim', name: 'SLIM, Shioli crater', lat: -13.32, lon: 25.25 },
+  { id: 'copernicus', name: 'Copernicus crater', lat: 9.62, lon: -20.08 },
+  { id: 'tycho', name: 'Tycho crater', lat: -43.31, lon: -11.36 },
+];

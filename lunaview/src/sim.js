@@ -2,7 +2,7 @@
 // real position on real terrain and tracks sunlight, surface temperature, battery, Earth contact and
 // driving. A Monte Carlo wrapper repeats the run with realistic uncertainty to give a success rate.
 import { bodyVectors, localAngles } from './astro.js';
-import { xyToLatLon } from './terrain.js';
+import { distance, between, toVec, toLatLon } from './terrain.js';
 
 const DEG = Math.PI / 180;
 const SIGMA = 5.670e-8;
@@ -14,28 +14,25 @@ const HOUR = 3600 * 1000;
 
 // ---------- route ----------
 
-// Sample the route every `step` metres: position, distance along route, height, slope and grade.
-export function prepareRoute(terrain, waypoints, step = 80) {
+// Sample the route every `step` metres (default: 80 m where the 80 m polar data is, else 200 m):
+// position, distance along route, height, slope, grade and the terrain detail used.
+export function prepareRoute(terrain, waypoints, step) {
+  step ??= waypoints.every((w) => w.lat < -80) ? 80 : 200;
   const pts = [];
   let dist = 0;
   for (let i = 0; i < waypoints.length; i++) {
     const a = waypoints[i], b = waypoints[i + 1];
-    if (!b) {
-      pts.push({ x: a.x, y: a.y, d: dist });
-      break;
-    }
-    const len = Math.hypot(b.x - a.x, b.y - a.y);
+    if (!b) { pts.push({ lat: a.lat, lon: a.lon, d: dist }); break; }
+    const len = distance(a, b);
     const n = Math.max(1, Math.ceil(len / step));
-    for (let k = 0; k < n; k++) {
-      const f = k / n;
-      pts.push({ x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f, d: dist + len * f });
-    }
+    for (let k = 0; k < n; k++) pts.push({ ...between(a, b, k / n), d: dist + (len * k) / n });
     dist += len;
   }
   for (const p of pts) {
-    p.h = terrain.height(p.x, p.y);
-    p.slope = terrain.surface(p.x, p.y).slope;
-    p.fine = terrain.isFine(p.x, p.y);
+    p.h = terrain.height(p.lat, p.lon);
+    p.slope = terrain.surface(p.lat, p.lon).slope;
+    p.res = terrain.resolution(p.lat, p.lon);
+    p.v = toVec(p.lat, p.lon);
   }
   for (let i = 0; i < pts.length; i++) {
     const a = pts[Math.max(i - 1, 0)], b = pts[Math.min(i + 1, pts.length - 1)];
@@ -43,17 +40,19 @@ export function prepareRoute(terrain, waypoints, step = 80) {
     pts[i].grade = run > 0 ? Math.atan2(b.h - a.h, run) / DEG : 0; // + uphill along the route
   }
   const steepest = pts.reduce((m, p) => (p.slope > m.slope ? p : m), pts[0]);
-  return { pts, length: dist, steepest, climb: pts.reduce((s, p, i) => s + Math.max(0, i ? p.h - pts[i - 1].h : 0), 0) };
+  const coarsest = pts.reduce((m, p) => Math.max(m, p.res ?? 2000), 0);
+  return { pts, length: dist, steepest, coarsest, climb: pts.reduce((s, p, i) => s + Math.max(0, i ? p.h - pts[i - 1].h : 0), 0) };
 }
 
-function pointAt(route, d) {
+export function pointAt(route, d) {
   const pts = route.pts;
   if (d <= 0) return { ...pts[0], i: 0 };
   if (d >= route.length) return { ...pts[pts.length - 1], i: pts.length - 1 };
   let lo = 0, hi = pts.length - 1;
   while (hi - lo > 1) { const m = (lo + hi) >> 1; if (pts[m].d <= d) lo = m; else hi = m; }
   const a = pts[lo], b = pts[hi], f = (d - a.d) / (b.d - a.d || 1);
-  return { x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f, h: a.h + (b.h - a.h) * f, slope: Math.max(a.slope, b.slope), grade: a.grade, i: lo };
+  const ll = toLatLon({ x: a.v.x + (b.v.x - a.v.x) * f, y: a.v.y + (b.v.y - a.v.y) * f, z: a.v.z + (b.v.z - a.v.z) * f });
+  return { ...ll, h: a.h + (b.h - a.h) * f, slope: Math.max(a.slope, b.slope), grade: a.grade, i: lo };
 }
 
 // ---------- ephemeris cache ----------
@@ -70,18 +69,19 @@ export function ephemeris(stepMs) {
 
 // ---------- environment at one place and time ----------
 
-export function environment(terrain, eph, x, y, h, t, mastM = 1.5) {
+export function environment(terrain, eph, lat, lon, h, t, mastM = 1.5) {
   const v = eph(t);
-  const { lat, lon } = xyToLatLon(x, y);
   const site = { lat, lon };
   const sun = localAngles(site, v.sun);
   const earth = localAngles(site, v.earth, v.earthDistKm);
   const h0 = h + mastM;
-  const sunHz = terrain.horizon(x, y, sun.az, h0);
-  const earthHz = terrain.horizon(x, y, earth.az, h0);
+  // Skip tracing the skyline when the answer is clear: Sun well below the horizon (night), or Earth
+  // high in the sky.
+  const sunHz = sun.el < -2 ? 0 : terrain.horizon(lat, lon, sun.az, h0);
+  const earthHz = earth.el < -2 ? 0 : earth.el > 25 ? -90 : terrain.horizon(lat, lon, earth.az, h0);
   // Fraction of the Sun's 0.53 deg disc above the skyline.
   const sunVis = Math.min(1, Math.max(0, (sun.el - sunHz) / 0.53 + 0.5));
-  const surf = terrain.surface(x, y);
+  const surf = terrain.surface(lat, lon);
   const se = Math.cos(sun.el * DEG);
   const sunDir = { e: se * Math.sin(sun.az * DEG), n: se * Math.cos(sun.az * DEG), u: Math.sin(sun.el * DEG) };
   const cosI = Math.max(0, sunDir.e * surf.normal.e + sunDir.n * surf.normal.n + sunDir.u * surf.normal.u);
@@ -99,9 +99,8 @@ function sunlitAt(terrain, eph, route, i, t) {
   let v = cache.get(key);
   if (v === undefined) {
     const q = route.pts[i];
-    const { lat, lon } = xyToLatLon(q.x, q.y);
-    const sun = localAngles({ lat, lon }, eph(t).sun);
-    v = sun.el - terrain.horizon(q.x, q.y, sun.az, q.h + 1.5) > 0;
+    const sun = localAngles(q, eph(t).sun);
+    v = sun.el > -1 && sun.el - terrain.horizon(q.lat, q.lon, sun.az, q.h + 1.5) > 0;
     cache.set(key, v);
   }
   return v;
@@ -132,7 +131,7 @@ export function simulate({ terrain, eph, rover, route, start, days, stepMin = 15
   for (let s = 0; s <= steps; s++) {
     const t = t0 + s * dt;
     const pos = pointAt(route, d);
-    const env = environment(terrain, eph, pos.x, pos.y, pos.h, t);
+    const env = environment(terrain, eph, pos.lat, pos.lon, pos.h, t);
     // Ground temperature follows equilibrium with lag: warms in ~2 h, cools over ~10 h.
     tSurf = tSurf === null ? env.teq : tSurf + (env.teq - tSurf) * (1 - Math.exp(-dtH / (env.teq > tSurf ? 2 : 10)));
     const sunlit = env.sunVis > 0.5;
@@ -243,7 +242,7 @@ export function simulate({ terrain, eph, rover, route, start, days, stepMin = 15
       reachedAt = t;
       note(t, 'ok', `Reached the destination (${(route.length / 1000).toFixed(1)} km) on day ${Math.floor((t - t0) / (24 * HOUR)) + 1}.`);
       if (!mustSurvive) {
-        if (record) timeline.push({ t, d, soc: Math.max(0, soc) / cap, gen, load, heater, tSurfC: tSurf - 273.15, sunVis: env.sunVis, earthVis: env.earthVis, sunEl: env.sun.el, sunAz: env.sun.az, earthEl: env.earth.el, earthAz: env.earth.az, state: 'done', x: route.pts[route.pts.length - 1].x, y: route.pts[route.pts.length - 1].y, h: route.pts[route.pts.length - 1].h, why: '' });
+        if (record) timeline.push({ t, d, soc: Math.max(0, soc) / cap, gen, load, heater, tSurfC: tSurf - 273.15, sunVis: env.sunVis, earthVis: env.earthVis, sunEl: env.sun.el, sunAz: env.sun.az, earthEl: env.earth.el, earthAz: env.earth.az, state: 'done', lat: route.pts[route.pts.length - 1].lat, lon: route.pts[route.pts.length - 1].lon, h: route.pts[route.pts.length - 1].h, why: '' });
         break;
       }
     }
@@ -254,7 +253,7 @@ export function simulate({ terrain, eph, rover, route, start, days, stepMin = 15
     if (record) {
       timeline.push({
         t, d, soc: Math.max(0, soc) / cap, gen, load, heater, tSurfC: tSurf - 273.15, sunVis: env.sunVis, earthVis: env.earthVis,
-        sunEl: env.sun.el, sunAz: env.sun.az, earthEl: env.earth.el, earthAz: env.earth.az, state, x: pos.x, y: pos.y, h: pos.h,
+        sunEl: env.sun.el, sunAz: env.sun.az, earthEl: env.earth.el, earthAz: env.earth.az, state, lat: pos.lat, lon: pos.lon, h: pos.h,
         why: state === 'park' || state === 'charge' || state === 'hibernate' ? reasonsNotToDrive.join(', ') : state === 'retreat' ? 'heading back to sunlight' : '',
       });
     }

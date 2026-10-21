@@ -12,66 +12,93 @@
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Saira+Condensed:wght@500;600;700&display=swap">
 </head>
 <body>
-  <main id="app">
-    <canvas id="globe" aria-label="3D Moon. Drag to rotate, scroll to zoom, double-click to fly in. In route mode, click to add route points."></canvas>
+  <main id="app" data-stage="plan">
+    <canvas id="globe" aria-label="3D Moon. Drag to rotate, scroll to zoom, double-click to fly in. While choosing a landing site or route, click the ground."></canvas>
     <div id="labels" class="labels"></div>
 
     <header class="top">
-      <button class="round" id="menuBtn" type="button" aria-label="Mission setup" aria-controls="setup" aria-expanded="true">
+      <button class="round" id="menuBtn" type="button" aria-label="Show the mission plan" aria-controls="setup" aria-expanded="true">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
       </button>
+      <nav class="stages" aria-label="Mission stages">
+        <button type="button" data-stage="plan" aria-current="step"><b>1</b>Plan</button>
+        <button type="button" data-stage="forecast" disabled><b>2</b>Forecast</button>
+        <button type="button" data-stage="replay" disabled><b>3</b>Replay</button>
+      </nav>
       <div class="search" role="search">
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6"/><path d="m15 15 5 5"/></svg>
-        <input id="search" type="search" placeholder="Go to a site or coordinates (-89.4, -137)" autocomplete="off" aria-label="Go to a landing site">
+        <input id="search" type="search" placeholder="Land at a place or coordinates (0.67, 23.47)" autocomplete="off" aria-label="Choose a landing place">
         <ul id="results" class="results" role="listbox" hidden></ul>
       </div>
       <button class="cta" id="runBtn" type="button">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v16l13-8Z"/></svg>
-        <span>Simulate mission</span>
+        <span>Simulate</span>
       </button>
     </header>
 
     <div class="brand" aria-hidden="true">LUNAVIEW<span>Rover mission simulator</span></div>
+    <div class="mode-hint" id="modeHint" hidden></div>
+
+    <!-- Replay: live readout while the rover drives -->
+    <section class="hud" id="hud" hidden aria-label="Rover status" aria-live="off">
+      <div class="hud-time"><span id="hudDay">Day 1</span><span class="mono" id="hudClock">00:00 UTC</span></div>
+      <div class="hud-state" id="hudState">Driving</div>
+      <div class="gauge"><span>Battery</span><div class="bar"><i id="hudBatt"></i></div><b class="mono" id="hudBattTxt">100%</b></div>
+      <div class="hud-grid">
+        <div><span>Ground</span><b class="mono" id="hudTemp">—</b></div>
+        <div><span>Driven</span><b class="mono" id="hudDist">—</b></div>
+        <div><span>Sun</span><b id="hudSun">—</b></div>
+        <div><span>Earth</span><b id="hudEarth">—</b></div>
+        <div><span>Solar in</span><b class="mono" id="hudGen">—</b></div>
+        <div><span>Power use</span><b class="mono" id="hudLoad">—</b></div>
+      </div>
+      <p class="hint" id="hudScale"></p>
+    </section>
+    <div class="caption" id="caption" hidden></div>
 
     <div class="bottom">
-      <button class="chip site-chip" id="siteChip" type="button" title="Open mission setup">
-        <span class="chip-k" id="roverChipK">ROVER</span>
+      <button class="chip site-chip" id="siteChip" type="button" title="Show the mission plan">
+        <span class="chip-k">ROVER</span>
         <span id="siteName">MID-SIZE ROVER</span>
         <span class="chip-sub" id="siteCoords">No route yet</span>
       </button>
 
       <div class="center-stack">
-        <div class="playback" id="playback" hidden>
+        <div class="timeline" id="timeline" hidden>
           <button class="round small" type="button" id="pbPlay" aria-label="Play the mission">▶</button>
-          <input type="range" id="pbSlider" min="0" max="100" value="0" aria-label="Mission time">
+          <select id="pbSpeed" aria-label="Replay speed">
+            <option value="1">1 hour / s</option>
+            <option value="4" selected>4 hours / s</option>
+            <option value="12">12 hours / s</option>
+            <option value="24">1 day / s</option>
+          </select>
+          <div class="scrub"><canvas id="pbStrip" aria-label="Mission timeline: rover activity and events. Drag to move through the mission."></canvas></div>
           <span class="mono" id="pbText"></span>
+          <button class="ghost" type="button" id="followBtn" aria-pressed="true">Following rover</button>
         </div>
         <div class="readout" id="readout" aria-live="polite">
           <span class="sun-dot"></span><span id="roSun">Sun —</span>
           <span class="earth-dot"></span><span id="roEarth">Earth —</span>
         </div>
         <nav class="toolbar" aria-label="View controls">
-          <button type="button" class="tool" data-tool="draw" aria-pressed="false" title="Draw the rover's route: click points on the ground">
-            <svg viewBox="0 0 32 32"><circle cx="7" cy="24" r="3"/><circle cx="25" cy="8" r="3"/><path d="M9.5 22c4-6 9-4 13.5-11.5" stroke-dasharray="3 3"/></svg>
-            <span>Route</span></button>
-          <button type="button" class="tool" data-tool="map" aria-pressed="false" title="Sunlight map: how much of the mission each spot is sunlit">
-            <svg viewBox="0 0 32 32"><rect x="5" y="5" width="22" height="22" rx="2"/><path d="M5 16h22M16 5v22"/><circle cx="10.5" cy="10.5" r="2.5"/></svg>
-            <span>Sun map</span></button>
           <button type="button" class="tool on" data-tool="sun" aria-pressed="true" title="Real sunlight for the chosen time">
             <svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="5"/><path d="M16 4v4M16 24v4M4 16h4M24 16h4M7.5 7.5l2.8 2.8M21.7 21.7l2.8 2.8M7.5 24.5l2.8-2.8M21.7 10.3l2.8-2.8"/></svg>
             <span>Sunlight</span></button>
+          <button type="button" class="tool" data-tool="map" aria-pressed="false" title="Sunlight map: how much of the mission each spot is sunlit">
+            <svg viewBox="0 0 32 32"><rect x="5" y="5" width="22" height="22" rx="2"/><path d="M5 16h22M16 5v22"/><circle cx="10.5" cy="10.5" r="2.5"/></svg>
+            <span>Sun map</span></button>
           <button type="button" class="tool" data-tool="relief" aria-pressed="false" title="Terrain height: true scale or 5x exaggerated">
             <svg viewBox="0 0 32 32"><path d="M3 25 11 12l5 7 4-5 9 11Z"/></svg>
             <span id="reliefLabel">Relief ×1</span></button>
           <button type="button" class="tool" data-tool="fly" title="Fly to the route">
             <svg viewBox="0 0 32 32"><circle cx="14" cy="14" r="8"/><path d="m20 20 7 7M14 10v8M10 14h8"/></svg>
-            <span>Close-up</span></button>
+            <span>Route</span></button>
           <button type="button" class="tool" data-tool="home" title="Back to the whole Moon">
             <svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="11"/><path d="M8 12c4 2 12 2 16 0M8 20c4-2 12-2 16 0"/></svg>
             <span>Globe</span></button>
           <button type="button" class="tool" data-tool="stand" title="Stand where the rover is">
             <svg viewBox="0 0 32 32"><path d="M3 24c4-5 7-7 10-5s5-6 9-4 5 4 7 4"/><circle cx="22" cy="8" r="3"/><path d="M3 27h26"/></svg>
-            <span>Stand</span></button>
+            <span>Sky</span></button>
           <button type="button" class="tool" data-tool="compare" title="Compare simulated missions">
             <svg viewBox="0 0 32 32"><rect x="5" y="7" width="8" height="18" rx="1"/><rect x="19" y="11" width="8" height="14" rx="1"/></svg>
             <span>Compare <b id="cmpCount">0</b></span></button>
@@ -80,7 +107,7 @@
 
       <button class="chip time-chip" id="timeChip" type="button" aria-controls="timePanel" aria-expanded="false" title="Change date and time (UTC)">
         <span id="clock" class="clock">00:00:00</span>
-        <span id="dateStr" class="chip-sub">2026-12-14 UTC</span>
+        <span id="dateStr" class="chip-sub">2026-11-20 UTC</span>
       </button>
     </div>
 
@@ -97,11 +124,11 @@
       <button type="button" class="link" id="nowBtn">Jump to now</button>
     </section>
 
-    <!-- Mission setup: rover, route, timing -->
-    <aside class="drawer left" id="setup" aria-label="Mission setup">
+    <!-- Stage 1: plan -->
+    <aside class="drawer left" id="setup" aria-label="Mission plan">
       <div class="drawer-head">
-        <h2>Mission</h2>
-        <button class="close" type="button" data-close="setup" aria-label="Close mission setup">×</button>
+        <h2>Plan the mission</h2>
+        <button class="close" type="button" data-close="setup" aria-label="Hide the mission plan">×</button>
       </div>
       <form id="missionForm" class="form" novalidate>
         <fieldset>
@@ -113,8 +140,8 @@
             <div class="spec-grid" id="specGrid"></div>
             <label for="fPanel">Solar panels</label>
             <select id="fPanel">
-              <option value="vertical">Vertical, turning to face the Sun (best near the pole)</option>
-              <option value="horizontal">Flat on top</option>
+              <option value="vertical">Vertical, turning to face the Sun (best near the poles)</option>
+              <option value="horizontal">Flat on top (best near the equator)</option>
             </select>
             <label class="check"><input type="checkbox" id="fComms"> Needs Earth in view to drive</label>
             <p class="hint">Preset values are illustrative. Replace them with your rover's numbers.</p>
@@ -122,16 +149,20 @@
         </fieldset>
 
         <fieldset>
-          <legend><span class="step">2</span>Route</legend>
-          <label for="fStart">Landing site</label>
+          <legend><span class="step">2</span>Landing site and route</legend>
+          <p class="hint">Anywhere on the Moon. Pick a place, search above, or click the Moon.</p>
+          <label for="fStart">Landing place</label>
           <select id="fStart"></select>
+          <div class="row">
+            <button class="ghost" type="button" id="landBtn" aria-pressed="false">Click the Moon to land</button>
+            <button class="ghost" type="button" id="drawBtn" aria-pressed="false">Add route points</button>
+          </div>
           <ol class="waypoints" id="wpList"></ol>
           <div class="row">
-            <button class="ghost" type="button" id="drawBtn" aria-pressed="false">Draw on map</button>
             <button class="ghost" type="button" id="undoBtn">Undo</button>
-            <button class="ghost" type="button" id="clearBtn">Clear</button>
+            <button class="ghost" type="button" id="clearBtn">Clear route</button>
+            <button class="ghost" type="button" id="planBtn">Find the sunniest route</button>
           </div>
-          <button class="ghost wide" type="button" id="planBtn">Find the sunniest route</button>
           <p class="hint" id="routeStats"></p>
         </fieldset>
 
@@ -141,18 +172,18 @@
           <input id="fDate" type="datetime-local" step="3600">
           <div class="two">
             <div><label for="fDays">Mission length (days)</label><input id="fDays" type="number" min="1" max="60" step="1"></div>
-            <div><label for="fSlip">Landing date could slip by ± days</label><input id="fSlip" type="number" min="0" max="10" step="1"></div>
+            <div><label for="fSlip">Landing could slip by ± days</label><input id="fSlip" type="number" min="0" max="10" step="1"></div>
           </div>
-          <label class="check"><input type="checkbox" id="fSurvive" checked> Rover must survive to the end of the mission, not just reach the destination</label>
+          <label class="check"><input type="checkbox" id="fSurvive" checked> Rover must survive to the end, not just reach the destination</label>
           <label for="fRuns">Simulated runs</label>
           <select id="fRuns"><option value="25">25 (quick)</option><option value="50" selected>50</option><option value="100">100 (thorough)</option></select>
         </fieldset>
-        <button class="cta wide" type="submit" id="simBtn">Simulate mission</button>
+        <button class="cta wide" type="submit" id="simBtn">Simulate the mission</button>
         <p class="hint" id="simStatus" aria-live="polite"></p>
       </form>
     </aside>
 
-    <!-- Results -->
+    <!-- Stage 2: forecast -->
     <aside class="drawer right" id="report" aria-label="Mission forecast" hidden>
       <div class="drawer-head">
         <h2>Mission forecast</h2>

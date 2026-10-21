@@ -61,7 +61,7 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 /* Top bar */
 .top {
   position: absolute; top: 0; left: 0; right: 0;
-  display: grid; grid-template-columns: auto minmax(0, 620px) auto; justify-content: space-between; align-items: center; gap: 16px;
+  display: grid; grid-template-columns: auto auto minmax(0, 560px) auto; justify-content: space-between; align-items: center; gap: 16px;
   padding: calc(16px + env(safe-area-inset-top, 0px)) var(--gutter-r) 0 var(--gutter);
   pointer-events: none;
 }
@@ -162,6 +162,7 @@ select option { background: #11151f; }
 .drawer.left { left: 0; border-right-width: 1px; padding-left: max(22px, env(safe-area-inset-left, 0px)); }
 .drawer.right { right: 0; border-left-width: 1px; width: min(480px, 100%); padding-right: max(22px, env(safe-area-inset-right, 0px)); }
 @keyframes slide-in { from { opacity: 0; transform: translateY(8px); } }
+@keyframes fade-in { from { opacity: 0; } }
 .drawer-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 16px; }
 h2 { margin: 0; font: 700 24px/1.1 var(--font-display); letter-spacing: 0.04em; text-wrap: balance; }
 h3 { margin: 22px 0 8px; font: 600 13px var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-dim); }
@@ -229,6 +230,14 @@ h3 { margin: 22px 0 8px; font: 600 13px var(--font-mono); letter-spacing: 0.08em
 
 @media (max-width: 760px) {
   .top { grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; }
+  .stages { grid-column: 1 / -1; grid-row: 2; justify-self: center; }
+  .stages button { padding: 0 12px; }
+  .hud { top: calc(150px + env(safe-area-inset-top, 0px)); width: 210px; padding: 10px 12px; }
+  .hud-grid { grid-template-columns: 1fr 1fr; }
+  .mode-hint, .caption { top: calc(140px + env(safe-area-inset-top, 0px)); }
+  .timeline { flex-wrap: wrap; }
+  .timeline .scrub { flex-basis: 100%; order: 5; }
+  #pbText { flex: 1; }
   .cta span { display: none; }
   .cta { width: 52px; padding: 0; }
   .cta.wide span, .cta.wide { display: inline-flex; width: 100%; }
@@ -313,6 +322,62 @@ summary { cursor: pointer; color: var(--ink-dim); font-size: 13px; }
 .log li.warning { color: var(--warn); }
 .log li.ok { color: var(--ok); }
 .method { margin-top: 18px; font-size: 11.5px; line-height: 1.5; }
+
+/* ---------- Stages: Plan -> Forecast -> Replay ---------- */
+.stages { display: flex; gap: 4px; padding: 4px; height: 52px; box-sizing: border-box; border-radius: 26px; background: var(--glass); border: 1px solid var(--line); backdrop-filter: blur(10px); }
+.stages button { display: inline-flex; align-items: center; gap: 8px; padding: 0 16px; border: 0; border-radius: 22px; background: none; color: var(--ink-dim); font: 600 16px/1 var(--font-display); letter-spacing: 0.06em; text-transform: uppercase; }
+.stages button b { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; border: 1px solid currentColor; font: 600 11px var(--font-mono); }
+.stages button:hover:not(:disabled) { color: var(--ink); }
+.stages button[aria-current="step"] { background: var(--sun); color: var(--sun-ink); }
+.stages button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.mode-hint {
+  position: absolute; left: 50%; top: calc(84px + env(safe-area-inset-top, 0px)); transform: translateX(-50%); z-index: 4;
+  padding: 8px 16px; border-radius: 18px; background: var(--sun); color: var(--sun-ink); font-weight: 600; font-size: 13.5px; pointer-events: none; max-width: calc(100% - 32px); text-align: center;
+}
+
+/* Replay HUD: what the rover sees and feels right now. */
+.hud {
+  position: absolute; left: var(--gutter); top: calc(84px + env(safe-area-inset-top, 0px)); z-index: 3; width: 250px; box-sizing: border-box;
+  display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; border-radius: 18px; background: var(--glass); border: 1px solid var(--line); backdrop-filter: blur(10px);
+}
+.hud-time { display: flex; justify-content: space-between; align-items: baseline; font: 700 20px/1 var(--font-display); letter-spacing: 0.04em; }
+.hud-time .mono { font-size: 12px; color: var(--ink-dim); }
+.hud-state { align-self: flex-start; padding: 4px 10px; border-radius: 10px; font: 600 12px var(--font-mono); letter-spacing: 0.06em; text-transform: uppercase; background: rgba(255,255,255,0.08); }
+.gauge { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 8px; font-size: 12px; color: var(--ink-dim); }
+.gauge b { color: var(--ink); font-size: 12px; min-width: 38px; text-align: right; }
+.bar { height: 10px; border-radius: 5px; background: var(--shadow); overflow: hidden; }
+.bar i { display: block; height: 100%; width: 100%; background: var(--ok); transition: width 0.2s linear, background 0.3s; }
+.hud-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; }
+.hud-grid > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.hud-grid span { font: 500 10px var(--font-mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-dim); }
+.hud-grid b { font-weight: 500; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hud .hint { margin: 0; font-size: 11px; }
+
+/* Event captions during the replay. */
+.caption {
+  position: absolute; left: 50%; top: calc(84px + env(safe-area-inset-top, 0px)); transform: translateX(-50%); z-index: 3;
+  max-width: min(560px, calc(100% - 32px)); padding: 10px 16px; border-radius: 14px; background: var(--glass-hi); border: 1px solid var(--line); border-left: 4px solid var(--ink-dim);
+  font-size: 14px; pointer-events: none; animation: fade-in 0.25s ease-out;
+}
+.caption.critical { border-left-color: var(--crit); }
+.caption.warning { border-left-color: var(--warn); }
+.caption.ok { border-left-color: var(--ok); }
+
+/* Mission timeline: play, speed, scrub strip, follow camera. */
+.timeline { display: flex; align-items: center; gap: 10px; width: min(820px, 100%); padding: 8px 12px; border-radius: 22px; background: var(--glass-hi); border: 1px solid var(--line); backdrop-filter: blur(10px); box-sizing: border-box; }
+.timeline select { height: 34px; padding: 0 8px; border-radius: 10px; border: 1px solid var(--line); background: var(--shadow); font-size: 12px; flex: none; width: auto; }
+.scrub { flex: 1; min-width: 120px; }
+.scrub canvas { display: block; width: 100%; height: 30px; cursor: ew-resize; touch-action: none; }
+#pbText { font-size: 12px; flex: 0 1 auto; min-width: 0; white-space: normal; max-width: 220px; }
+.timeline .ghost { white-space: nowrap; }
+.watch { margin-top: 14px; }
+
+/* Stage layout: the report and setup drawers belong to their stages; the replay is full-screen. */
+#app[data-stage="replay"] .brand { display: none; }
+#app[data-stage="replay"] .bottom { grid-template-columns: auto minmax(0, 1fr) auto; }
+#app[data-stage="replay"] .center-stack { width: 100%; }
+#app[data-stage="replay"] .readout { display: none; }
 
 .playback { display: flex; align-items: center; gap: 10px; width: min(760px, 100%); padding: 8px 14px; border-radius: 22px; background: var(--glass-hi); border: 1px solid var(--line); backdrop-filter: blur(10px); box-sizing: border-box; }
 .playback input { flex: 1; min-width: 80px; accent-color: var(--ok); }

@@ -1,6 +1,6 @@
 # LunaView: lunar rover mission simulator
 
-NASA Space Apps Challenge 2026 project. Before a company sends a rover to the Moon's south pole, LunaView
+NASA Space Apps Challenge 2026 project. Before a company sends a rover to the Moon, anywhere on it, LunaView
 simulates the mission on real NASA terrain and the real sky: where the Sun and Earth will be, which ground will be
 in shadow, how cold it gets, how the battery holds up and whether the rover can climb the slopes. It runs the
 mission many times with realistic uncertainty and reports the **chance of success**, **why missions fail** and
@@ -18,16 +18,26 @@ npm run build          # static site in dist/ (deploy to Netlify)
 
 ## Using it
 
-1. **Rover**: pick a preset or enter your own specifications (mass, solar array, battery, power draws, speed,
-   steepest slope, insulation, heaters, temperature limits, whether it needs Earth in view to drive).
-2. **Route**: pick a landing site, then **Draw on map** and click the ground to add points (poleward of 80°S).
-   **Find the sunniest route** plans a path that stays in sunlight and avoids slopes the rover can't climb.
-   **Sun map** shows how much of the mission each spot is sunlit.
-3. **When**: landing date, mission length, how many days the landing could slip, and how many runs.
-4. **Simulate mission**: the forecast shows the success rate, why runs failed, an hour-by-hour chart of battery,
-   ground temperature, sunlight, Earth contact and rover activity, a mission log, and tested suggestions.
-   **Replay on the Moon** drives the rover along the route on the 3D Moon; **Stand where the rover is** shows
-   its sky; **Compare** lines up to three forecasts.
+The app works in three stages, shown as tabs at the top.
+
+1. **Plan**
+   - **Rover**: pick a preset or enter your own specifications (mass, solar array, battery, power draws, speed,
+     steepest slope, insulation, heaters, temperature limits, whether it needs Earth in view to drive).
+   - **Landing**: anywhere on the Moon. Type a place or coordinates in the search box, pick from the list
+     (south-pole candidate sites, Apollo, Lunokhod, Chang'e, Chandrayaan-3, SLIM, big craters), or press
+     **Click the Moon to land** and click the ground.
+   - **Route**: **Add route points** and click the ground. **Find the sunniest route** plans a path that stays in
+     sunlight and avoids slopes the rover can't climb. **Sun map** shows how much of the mission each spot is sunlit.
+   - **When**: landing date, mission length, how many days the landing could slip, and how many runs.
+2. **Forecast**: **Simulate** gives the success rate, why runs failed, an hour-by-hour chart of battery, ground
+   temperature, sunlight, Earth contact and rover activity, a mission log, and tested suggestions.
+3. **Replay**: watch the rover drive the route on the 3D Moon. The camera follows it (drag to look around; press
+   **Following rover** to fly freely), the panel turns to the Sun, the trail shows where it has been, and a live
+   panel shows the day, battery, ground temperature, sunlight, Earth contact and power. The timeline strip shows
+   sunlight (top) and what the rover was doing (bottom) with marks for events; drag it to jump to any moment,
+   pick a speed, or press Space to pause. The replay stops at key events (entering shadow, a blocked slope,
+   arrival, failure) with a caption. **Sky** shows the rover's sky at that moment; **Compare** lines up to three
+   forecasts.
 
 ## The simulation
 
@@ -35,7 +45,7 @@ Every 15 minutes of mission time, at the rover's current position:
 
 | What | How |
 |---|---|
-| Terrain, slope | NASA LOLA 80 m south polar DEM (LDEM_80S_80M), slopes over 160 m |
+| Terrain, slope | NASA LOLA 80 m south polar DEM (LDEM_80S_80M) poleward of 80°S; elsewhere LOLA global heights at ~950 m (from ldem_64) |
 | Sun and Earth | astronomy-engine positions; skyline in their direction traced over the DEM out to 150 km, with lunar curvature |
 | Sunlight on the panels | Share of the Sun's 0.53° disc above the skyline × panel angle (vertical sun-tracking or flat) × distance to the Sun |
 | Ground temperature | Radiative balance of sunlit regolith on the local slope (albedo 0.12, emissivity 0.95); cools toward ~95 K in shadow, with lag |
@@ -56,15 +66,18 @@ difference under 0.1°); its lighting gives Shackleton rim ~86% sunlight over 20
 (Bussey et al. 2010); synthetic cases (flat sunlit ground, a permanently shadowed site, a 30° slope) behave as expected.
 
 **Limits**: rover presets are illustrative. Slopes are measured over 80 m, so boulders and small craters are not
-seen. Temperatures are a first-order model, not a thermal simulation of your rover. The simulated area is the south
-polar region poleward of 80°S. The operating rules are simpler than a real operations team.
+seen. Temperatures are a first-order model, not a thermal simulation of your rover. Away from the south pole the terrain
+is ~950 m per sample, so slopes are averaged over about 2 km and small craters, rilles and boulders are not seen;
+the forecast says which detail each route used. The operating rules are simpler than a real operations team. In the
+replay the rover model is drawn larger than life so it stays visible.
 
 ## How it works
 
 - `src/astro.js`: Sun and Earth direction in the Moon-fixed frame (astronomy-engine + IAU lunar rotation model,
   about 1′ accuracy), converted to elevation and azimuth at the site. Earth parallax is included.
 - `src/sim.js`: the rover simulator (one mission, and the Monte Carlo wrapper).
-- `src/terrain.js`: heights, slopes and skylines from the 80 m polar DEM tiles (`public/textures/sim/`).
+- `src/terrain.js`: heights, slopes and skylines anywhere on the Moon, from the 80 m polar DEM tiles
+  (`public/textures/sim/`) and the whole-Moon height tiles (`public/textures/globe/c*_h.png`, 721 samples per 22.5°).
 - `src/planner.js`: sunlight map over the mission window and the sunniest-route planner.
 - `src/rovers.js`: rover presets and the specification fields.
 - `src/mission.js`: the earlier fixed-lander analysis (power and comms timelines), kept for its tests.
