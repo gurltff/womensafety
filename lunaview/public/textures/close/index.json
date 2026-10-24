@@ -1,0 +1,192 @@
+{
+ "apollo-11": {
+  "lat": 0.674,
+  "lon": 23.473,
+  "half_m": 8000.0,
+  "n": 513,
+  "min_m": -2062.395927346225,
+  "max_m": -1762.7191810216716,
+  "source": "SLDEM2015, LOLA + Kaguya (512 px/deg, about 59 m)",
+  "url": "https://pds-geosciences.wustl.edu/lro/lro-l-lola-3-rdr-v1/lrolol_1xxx/data/sldem2015/tiles/float_img/sldem2015_512_00n_30n_000_045_float.img"
+ },
+ "shackleton-rim": {
+  "lat": -89.687,
+  "lon": -162.635,
+  "half_m": 8000.0,
+  "n": 1025,
+  "min_m": -2846.5,
+  "max_m": 1968.7564227139908,
+  "source": "LOLA LDEM_875S_5M (5 m/px)",
+  "url": "https://pds-geosciences.wustl.edu/lro/lro-l-lola-3-rdr-v1/lrolol_1xxx/data/lola_gdr/polar/img/ldem_875s_5m.img"
+ },
+ "connecting-ridge": {
+  "lat": -89.443,
+  "lon": -138.454,
+  "half_m": 8000.0,
+  "n": 1025,
+  "min_m": -445.9212660484021,
+  "max_m": 1982.0058361410763,
+  "source": "LOLA LDEM_875S_5M (5 m/px)",
+  "url": "https://pds-geosciences.wustl.edu/lro/lro-l-lola-3-rdr-v1/lrolol_1xxx/data/lola_gdr/polar/img/ldem_875s_5m.img"
+ },
+ "de-gerlache-rim": {
+  "lat": -88.678,
+  "lon": -68.382,
+  "half_m": 8000.0,
+  "n": 1025,
+  "min_m": -783.051671531585,
+  "max_m": 1815.5,
+  "source": "LOLA LDEM_875S_5M (5 m/px)",
+  "url": "https://pds-geosciences.wustl.edu/lro/lro-l-lola-3-rdr-v1/lrolol_1xxx/data/lola_gdr/polar/img/ldem_875s_5m.img"
+ },
+ "malapert-massif": {
+  "lat": -85.991,
+  "lon": 2.771,
+  "half_m": 8000.0,
+  "n": 1025,
+  "min_m": 1723.7122977344015,
+  "max_m": 5173.5,
+  "source": "LOLA LDEM_85S_10M (10 m/px)",
+  "url": "https://pds-geosciences.wustl.edu/lro/lro-l-lola-3-rdr-v1/lrolol_1xxx/data/lola_gdr/polar/img/ldem_85s_10m.img"
+ },
+ "mons-mouton": {
+  "lat": -84.384,
+  "lon": 30.29,
+  "half_m": 8000.0,
+  "n": 513,
+  "min_m": 4593.5678792404815,
+  "max_m": 5605.907024530906,
+  "source": "LOLA LDEM_80S_20M (20 m/px)",
+  "url": "https://pds-geosciences.wustl.edu/lro/lro-l-lola-3-rdr-v1/lrolol_1xxx/data/lola_gdr/polar/img/ldem_80s_20m.img"
+ },
+ "apollo-12": {
+  "lat": -3.012,
+  "lon": -23.422,
+  "half_m": 8000.0,
+  "n": 513,
+  "min_m": -1529.5863960196573,
+  "max_m": -1358.6596526262158,
+  "source": "SLDEM2015, LOLA + Kaguya (512 px/deg, about 59 m)",
+  "url": "https://pds-geosciences.wustl.edu/lro/lro-l-lola-3-rdr-v1/lrolol_1xxx/data/sldem2015/tiles/float_img/sldem2015_512_30s_00s_315_360_float.img"
+ },
+ "apollo-14": {
+  "lat": -3.645,
+  "lon": -17.471,
+  "half_m": 8000.0,
+  "n": 513,
+  "min_m": -1245.3238190189925,
+  "max_m": -810.2452565723127,
+  "source": "SLDEM2015, LOLA + Kaguya (512 px/deg, about 59 m)",
+  "url": "https://pds-geosciences.wustl.edu/lro/lro-l-lola-3-rdr-v1/lrolol_1xxx/data/sldem2015/tiles/float_img/sldem2015_512_30s_00s_315_360_float.img"
+ },
+ "apollo-15": {
+  "lat": 26.132,
+  "lon": 3.634,
+  "half_m": 8000.0,
+  "n": 513,
+  "min_m": -2236.7545252476216,
+  "max_m": -471.14880480609725,
+  "source": "SLDEM2015, LOLA + Kaguya (512 px/deg, about 59 m)",
+  "url": "https://pds-geosciences.wustl.edu/lro/lro-l-lola-3-rdr-v1/lrolol_1xxx/data/sldem2015/tiles/float_img/sldem2015_512_00n_30n_000_045_float.img"
+ },
+ "apollo-16": {
+  "lat": -8.973,
+  "lon": 15.5,
+  "half_m": 8000.0,
+  "n": 513,
+  "min_m": -196.56994885490843,
+  "max_m": 583.9399105029386,
+  "source": "SLDEM2015, LOLA + Kaguya (512 px/deg, about 59 m)",
+  "url": "https://pds-geosciences.wustl.edu/lro/lro-l-lola-3-rdr-v1/lrolol_1xxx/data/sldem2015/tiles/float_img/sldem2015_512_30s_00s_000_045_float.img"
+ },
+ "apollo-17": {
+  "lat": 20.191,
+  "lon": 30.772,
+  "half_m": 8000.0,
+  "n": 513,
+  "min_m": -2932.089528062432,
+  "max_m": -345.86911547882363,
+  "source": "SLDEM2015, LOLA + Kaguya (512 px/deg, about 59 m)",
+  "url": "https://pds-geosciences.wustl.edu/lro/lro-l-lola-3-rdr-v1/lrolol_1xxx/data/sldem2015/tiles/float_img/sldem2015_512_00n_30n_000_045_float.img"
+ },
+ "lunokhod-1": {
+  "lat": 38.24,
+  "lon": -35.0,
+  "half_m": 8000.0,
+  "n": 513,
+  "min_m": -2557.6406076793305,
+  "max_m": -2414.259600272285,
+  "source": "SLDEM2015, LOLA + Kaguya (512 px/deg, about 59 m)",
+  "url": "https://pds-geosciences.wustl.edu/lro/lro-l-lola-3-rdr-v1/lrolol_1xxx/data/sldem2015/tiles/float_img/sldem2015_512_30n_60n_315_360_float.img"
+ },
+ "lunokhod-2": {
+  "lat": 25.85,
+  "lon": 30.45,
+  "half_m": 8000.0,
+  "n": 513,
+  "min_m": -2769.1659689916564,
+  "max_m": -1788.6637499259932,
+  "source": "SLDEM2015, LOLA + Kaguya (512 px/deg, about 59 m)",
+  "url": "https://pds-geosciences.wustl.edu/lro/lro-l-lola-3-rdr-v1/lrolol_1xxx/data/sldem2015/tiles/float_img/sldem2015_512_00n_30n_000_045_float.img"
+ },
+ "change-3": {
+  "lat": 44.12,
+  "lon": -19.51,
+  "half_m": 8000.0,
+  "n": 513,
+  "min_m": -2767.688304820096,
+  "max_m": -2590.8721248196084,
+  "source": "SLDEM2015, LOLA + Kaguya (512 px/deg, about 59 m)",
+  "url": "https://pds-geosciences.wustl.edu/lro/lro-l-lola-3-rdr-v1/lrolol_1xxx/data/sldem2015/tiles/float_img/sldem2015_512_30n_60n_315_360_float.img"
+ },
+ "change-4": {
+  "lat": -45.44,
+  "lon": 177.6,
+  "half_m": 8000.0,
+  "n": 513,
+  "min_m": -6007.49062591978,
+  "max_m": -5891.241508170782,
+  "source": "SLDEM2015, LOLA + Kaguya (512 px/deg, about 59 m)",
+  "url": "https://pds-geosciences.wustl.edu/lro/lro-l-lola-3-rdr-v1/lrolol_1xxx/data/sldem2015/tiles/float_img/sldem2015_512_60s_30s_135_180_float.img"
+ },
+ "chandrayaan-3": {
+  "lat": -69.37,
+  "lon": 32.32,
+  "half_m": 8000.0,
+  "n": 513,
+  "min_m": 328.1881702453024,
+  "max_m": 809.5117586215338,
+  "source": "LOLA LDEM_60S_60M (60 m/px)",
+  "url": "https://pds-geosciences.wustl.edu/lro/lro-l-lola-3-rdr-v1/lrolol_1xxx/data/lola_gdr/polar/img/ldem_60s_60m.img"
+ },
+ "slim": {
+  "lat": -13.32,
+  "lon": 25.25,
+  "half_m": 8000.0,
+  "n": 513,
+  "min_m": -1651.8762406683459,
+  "max_m": 449.8105973228155,
+  "source": "SLDEM2015, LOLA + Kaguya (512 px/deg, about 59 m)",
+  "url": "https://pds-geosciences.wustl.edu/lro/lro-l-lola-3-rdr-v1/lrolol_1xxx/data/sldem2015/tiles/float_img/sldem2015_512_30s_00s_000_045_float.img"
+ },
+ "copernicus": {
+  "lat": 9.62,
+  "lon": -20.08,
+  "half_m": 8000.0,
+  "n": 513,
+  "min_m": -3652.844949960706,
+  "max_m": -2229.9332730332812,
+  "source": "SLDEM2015, LOLA + Kaguya (512 px/deg, about 59 m)",
+  "url": "https://pds-geosciences.wustl.edu/lro/lro-l-lola-3-rdr-v1/lrolol_1xxx/data/sldem2015/tiles/float_img/sldem2015_512_00n_30n_315_360_float.img"
+ },
+ "tycho": {
+  "lat": -43.31,
+  "lon": -11.36,
+  "half_m": 8000.0,
+  "n": 513,
+  "min_m": -3488.9787911673106,
+  "max_m": -954.3672252891611,
+  "source": "SLDEM2015, LOLA + Kaguya (512 px/deg, about 59 m)",
+  "url": "https://pds-geosciences.wustl.edu/lro/lro-l-lola-3-rdr-v1/lrolol_1xxx/data/sldem2015/tiles/float_img/sldem2015_512_60s_30s_315_360_float.img"
+ }
+}
