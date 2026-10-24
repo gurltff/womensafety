@@ -691,7 +691,8 @@ export class Globe {
     if (!dir) return;
     const size = this.shadowSize ?? 0.1;
     this.sun.position.copy(this.sunTarget.position).addScaledVector(dir, size * 3 + 0.01);
-    this.earthshine.intensity = this.fullLight ? 0.3 : 0.14;
+    // nightLight lifts the unlit side so it can be seen (the LROC mosaic covers the whole Moon).
+    this.earthshine.intensity = this.fullLight ? 0.3 : (this.nightLight ?? 0.14);
   }
 
   // Shrink the shadow map to the area being looked at, so shadows sharpen as you zoom in.

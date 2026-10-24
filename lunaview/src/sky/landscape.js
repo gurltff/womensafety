@@ -138,24 +138,31 @@ export class Landscape {
   }
 
   // Light the ground for the Sun at (alt, az) and Earth (earthshine) with its phase and altitude.
-  light(sun, earth, { earthshine = true } = {}) {
+  // minAmbient: a floor for the ambient light so the ground can be seen at night ("bright view").
+  light(sun, earth, { earthshine = true, minAmbient = 0 } = {}) {
     if (!this.mesh) return;
-    const dir = new THREE.Vector3(Math.cos(sun.alt * DEG) * Math.sin(sun.az * DEG), Math.sin(sun.alt * DEG), -Math.cos(sun.alt * DEG) * Math.cos(sun.az * DEG));
+    // Bright view at night: a soft light from Earth's direction (where earthshine really comes from,
+    // or from high in the sky if Earth is down) so the relief of the ground can be seen.
+    const fill = minAmbient > 0.1 && sun.alt < -1;
+    const src = fill ? (earth.alt > 10 ? earth : { alt: 50, az: (sun.az + 180) % 360 }) : sun;
+    const dir = new THREE.Vector3(Math.cos(src.alt * DEG) * Math.sin(src.az * DEG), Math.sin(src.alt * DEG), -Math.cos(src.alt * DEG) * Math.cos(src.az * DEG));
     this.sun.position.copy(dir).multiplyScalar(1000);
     this.sun.target.position.set(0, 0, 0);
     // Exposure as the eye (or an Apollo Hasselblad) sets it for sunlit regolith.
-    this.sun.intensity = sun.alt > -1 ? 6.5 : 0;
+    this.sun.intensity = fill ? 3.2 : sun.alt > -1 ? 6.5 : 0;
+    this.sun.color.set(fill ? 0xd0dcf4 : 0xffffff);
     // Earthshine is ~1/10000 of sunlight; shown brighter, as a dark-adapted eye would see it.
     const eUp = Math.max(0, Math.sin(Math.max(0, earth.alt) * DEG));
-    this.ambient.intensity = 0.03 + (earthshine ? 0.55 * earth.illum * Math.sqrt(eUp) : 0);
+    this.ambient.intensity = fill ? 0.7 : Math.max(minAmbient, 0.03 + (earthshine ? 0.55 * earth.illum * Math.sqrt(eUp) : 0));
+    this.ambient.color.set(minAmbient > 0.1 ? 0xc4cde0 : 0x9fb4ff);
 
-    const key = `${sun.alt.toFixed(2)},${sun.az.toFixed(2)}`;
+    const key = fill ? 'fill' : `${sun.alt.toFixed(2)},${sun.az.toFixed(2)}`;
     if (key === this.lastSun) return;
     this.lastSun = key;
     const attr = this.mesh.geometry.attributes.shade;
     const pos = this.mesh.geometry.attributes.position.array;
     const s = attr.array;
-    if (sun.alt < -1) { s.fill(0); attr.needsUpdate = true; return; }
+    if (fill || sun.alt < -1) { s.fill(fill ? 1 : 0); attr.needsUpdate = true; return; }
     const { Rg, cell, maxH } = this.grid;
     const sx = Math.sin(sun.az * DEG), sy = Math.cos(sun.az * DEG), tanEl = Math.tan(sun.alt * DEG);
     const farBlock = this.farSkyAt(sun.az);
