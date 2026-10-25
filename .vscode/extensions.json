@@ -1,0 +1,7 @@
+{
+  // VS Code suggests these when you open the folder. Live Server runs the app with auto-reload.
+  "recommendations": [
+    "ritwickdey.LiveServer",
+    "esbenp.prettier-vscode"
+  ]
+}

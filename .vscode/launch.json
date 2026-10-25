@@ -1,0 +1,21 @@
+{
+  // Start Live Server first ("Go Live" in the status bar), then press F5 to open the app in Chrome with debugging.
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "chrome",
+      "request": "launch",
+      "name": "Open SafeCircle in Chrome",
+      "url": "http://127.0.0.1:5500/index.html",
+      "webRoot": "${workspaceFolder}"
+    },
+    {
+      "type": "chrome",
+      "request": "launch",
+      "name": "Open SafeCircle in Chrome (phone size)",
+      "url": "http://127.0.0.1:5500/index.html",
+      "webRoot": "${workspaceFolder}",
+      "runtimeArgs": ["--window-size=420,900"]
+    }
+  ]
+}

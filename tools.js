@@ -587,6 +587,11 @@ function initTools(){
   }
   if(state.checkin) runCheckinTicker(); // fires the alert straight away if it ran out while closed
   if('serviceWorker' in navigator && isSecureCtx() && location.protocol !== 'file:'){
-    navigator.serviceWorker.register('sw.js').catch(() => {});
+    // While developing on your own computer (e.g. VS Code Live Server) skip the offline cache so
+    // every edit shows up on reload. Add ?sw=on to the URL to test offline mode locally.
+    const local = ['localhost', '127.0.0.1'].includes(location.hostname);
+    if(local && new URLSearchParams(location.search).get('sw') !== 'on'){
+      navigator.serviceWorker.getRegistrations().then(rs => rs.forEach(r => r.unregister())).catch(() => {});
+    }else navigator.serviceWorker.register('sw.js').catch(() => {});
   }
 }

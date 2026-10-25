@@ -1,0 +1,9 @@
+{
+  "liveServer.settings.port": 5500,
+  "liveServer.settings.root": "/",
+  "liveServer.settings.ignoreFiles": [".vscode/**", "docs/**", "api-examples/**", "**/*.md"],
+  "editor.tabSize": 2,
+  "files.associations": { "*.webmanifest": "json" },
+  "files.exclude": { "**/.DS_Store": true },
+  "search.exclude": { "vendor/**": true, "globe-data.js": true }
+}

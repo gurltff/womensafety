@@ -52,7 +52,20 @@ It's a static site (plain HTML, CSS and JavaScript, no build step), so it runs f
 - Emergency contacts, custom SOS message, medical info card, data export, erase everything
 - Accessibility: keyboard support, Escape closes dialogs, screen-reader labels, honours reduced-motion
 
-## Run it locally
+## Open it in VS Code
+
+1. Unzip the project, then in VS Code choose **File → Open Folder…** and pick the `safecircle-india` folder.
+2. When VS Code suggests the recommended extensions, install **Live Server** (or search for it in the Extensions panel).
+3. Click **Go Live** in the bottom-right status bar, or right-click `index.html` → **Open with Live Server**. The app opens at http://127.0.0.1:5500.
+4. Edit any file and save. The page reloads by itself.
+
+Tips:
+- Sign-up runs in demo mode, so the verification code is shown on screen.
+- Press **F5** (with Live Server running) to open the app in Chrome with the debugger attached. Pick "phone size" to see the mobile layout.
+- On your own computer the offline cache is switched off, so you always see your latest code. Add `?sw=on` to the address to test offline mode.
+- In Chrome, press **Ctrl+Shift+M** (**Cmd+Shift+M** on Mac) in DevTools to preview phone sizes.
+
+## Run it without VS Code
 
 Any static web server works. GPS and the microphone need `localhost` or `https://`.
 
@@ -97,10 +110,11 @@ globe-data.js         Land dots for the globe (from Natural Earth)
 insights.js           Sign-in hero and the Insights screen charts
 verify.js             Email + phone OTP sign-up
 stats.js              Modelled NCRB case counter
-sw.js                 Service worker: offline app shell
+sw.js                 Service worker: offline app shell (off on localhost unless ?sw=on)
 manifest.webmanifest  Install metadata and home-screen shortcuts (SOS, Fake call)
 api-examples/         Alert server (Cloudflare Worker), Supabase SQL, example zones JSON
 vendor/leaflet/       Leaflet 1.9.4 map library (bundled for offline use)
+.vscode/              Recommended extensions, Live Server settings, Chrome launch config
 ```
 
 When you change any app file, bump `CACHE` in `sw.js` so installed copies update.
