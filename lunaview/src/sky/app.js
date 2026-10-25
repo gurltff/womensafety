@@ -531,6 +531,8 @@ function conditions(t) {
 }
 const K0 = 273.15;
 
+// The height model under the current landscape, as named in tools/fetch_closeups.py.
+const heightSource = () => surface.landscape.close?.source.replace(/ \(.*\)$/, '') ?? 'LOLA global heights';
 const STATUS = { go: 'GO', caution: 'CAUTION', nogo: 'NO GO', none: 'N/A' };
 const hhmm = (h) => `${String(Math.floor(h)).padStart(2, '0')}:${String(Math.floor((h % 1) * 60)).padStart(2, '0')}`;
 const latLonShort = (t) => `${Math.abs(t.lat).toFixed(3)}${t.lat < 0 ? 'S' : 'N'} ${Math.abs(t.lon).toFixed(3)}${t.lon < 0 ? 'W' : 'E'}`;
@@ -648,7 +650,7 @@ function renderReport() {
     ${row('Earth', `el ${c.earth.alt.toFixed(1)}°  ${c.earthUp ? 'in view' : 'hidden'}`, c.ev.earthSet ? `sets ${at(c.ev.earthSet)}` : c.ev.earthRise ? `rises ${at(c.ev.earthRise)}` : 'in view all month')}
     ${row('Surface temp', c.temp ? fmtC(c.temp.k - K0) : 'n/a', c.temp ? `${fmtC(tmin)} to ${fmtC(tmax)} over 30 d; ${esc(c.temp.src)}` : '')}
     ${row('Rocks >1 m', c.rocks != null ? `${(c.rocks * 100).toFixed(1)}%` : 'n/a', c.rocks != null ? 'area covered; typical mare 0.5% (Diviner)' : 'Diviner map covers 60S to 60N')}
-    ${row('Slope', c.slope != null ? `${c.slope.toFixed(1)}°` : 'n/a', c.built ? `over ${Math.round(surface.landscape.grid.cell * 2)} m, LOLA / SLDEM2015` : 'coarse; stand here for the measured value')}
+    ${row('Slope', c.slope != null ? `${c.slope.toFixed(1)}°` : 'n/a', c.built ? `over ${Math.round(surface.landscape.grid.cell * 2)} m, ${heightSource()}` : 'coarse; stand here for the measured value')}
     ${row('Magnetotail', c.tl[0].tail ? 'inside' : 'outside', c.tl[0].tail ? `leaves ${at(c.ev.tailOut)}` : c.ev.tailIn ? `enters ${at(c.ev.tailIn)}` : '')}
   </table>`;
   $('repTl').innerHTML = timelineSvg(c.tl);
@@ -705,7 +707,7 @@ function renderHazardMap(c) {
     <span><i style="background:#f0b429"></i>8 to 15°</span>
     <span><i style="background:#e5533f"></i>over 15°</span>
     <span><i style="background:#222"></i>in shadow at this time</span>
-    <span class="note">${(2 * R / 1000).toFixed(0)} x ${(2 * R / 1000).toFixed(0)} km, north up, spot at centre. Slopes over ${Math.round(L.grid.cell * 2)} m baselines from LOLA / SLDEM2015; shadows traced for the Sun at this time.</span></div></div>`;
+    <span class="note">${(2 * R / 1000).toFixed(0)} x ${(2 * R / 1000).toFixed(0)} km, north up, spot at centre. Slopes over ${Math.round(L.grid.cell * 2)} m baselines from ${heightSource()}; shadows traced for the Sun at this time.</span></div></div>`;
   const ctx = box.querySelector('canvas').getContext('2d');
   const img = ctx.createImageData(N, N);
   const job = ++mapJob, sun = c.sun;
