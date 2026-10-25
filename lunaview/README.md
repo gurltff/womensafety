@@ -39,6 +39,25 @@ npm test               # simulator, terrain and astronomy checks
 npm run build          # static site in dist/ (deploy to Netlify)
 ```
 
+## Site report (for crews)
+
+The planetarium carries a go / no-go panel (top right) and a full site report (press R, or pick a
+spot in orbit view and choose Site report). For the place and moment shown it gives:
+
+- surface temperature now and over the next 30 days, from the LRO Diviner Global Cumulative
+  Product (Williams et al. 2017): measured bolometric temperatures by local solar time, 0.5 deg
+  bins at the named places and 2 deg bins elsewhere;
+- rock cover from the Diviner rock abundance map (Bandfield et al. 2011), 60S to 60N;
+- the slope underfoot and an 8 km slope and shadow map from LOLA / SLDEM2015 heights, with
+  shadows ray-traced for the real Sun;
+- sunrise, sunset, hours of sunlight, when Earth is in view for direct radio, and when the Moon
+  is inside Earth's magnetotail;
+- live space weather: GOES protons and X-rays from NOAA SWPC, flares, solar particle events and
+  CMEs from NASA DONKI, and NOAA's three-day radiation storm forecast.
+
+The go / no-go limits are illustrative planning values, stated in the report. Data are prepared by
+`tools/fetch_diviner.py` (public/env/) and `tools/fetch_closeups.py` (public/textures/close/).
+
 ## Rover mission simulator (simulator.html)
 
 The second page works like mission control over a 3D Moon, in three steps shown at the top.

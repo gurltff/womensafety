@@ -9,6 +9,7 @@ import { SITES, PLACES, parseCoords } from '../sites.js';
 import { SkyLayer, loadSky } from './skylayer.js';
 import { SurfaceView, dirOf, altAzOf } from './surface.js';
 import { loadAlbedo, loadCloseUp, EYE_M } from './landscape.js';
+import { loadEnv, localHour, temperatureK, rockFraction, timeline, spaceWeather, sScale, flareClass, assess } from './report.js';
 import { observerAt, solarSystem, horizonMatrix, subPoints, riseSet, eqjToRaDec, moonPhase, MOON_R_KM } from './ephem.js';
 
 const $ = (id) => document.getElementById(id);
@@ -139,6 +140,8 @@ function tick() {
     globe.setSunDirection(subPoints(frameState.date).sunDirMf);
     if (now - lastMarkers > 500) { lastMarkers = now; orbitMarkers(); }
   }
+  if (now - lastGng > 1500) { lastGng = now; renderGng(); }
+  if (!$('win-report').hidden && now - lastRep > 2000) { lastRep = now; renderReport(); }
   if (now - lastInfo > 250) { lastInfo = now; renderInfo(); renderStatus(); syncDateWindow(); }
 }
 
@@ -403,7 +406,7 @@ function spotPopup(lat, lon, name) {
     Sun ${sun.alt.toFixed(1)}° ${sun.alt > 0 ? 'above' : 'below'} the horizon<br>
     Earth ${earth.alt.toFixed(1)}° ${earth.alt > 0 ? 'above' : 'below'} the horizon<br>
     <span style="color:#999">(flat horizon; standing there uses the real terrain)</span><br>
-    <button type="button">Stand here</button>`;
+    <button type="button">Stand here</button> <button type="button" data-act="report">Site report</button>`;
   const p = globe.camera.position.clone();
   const w = llToWorld(lat, lon, 1).project(globe.camera);
   void p;
@@ -411,6 +414,11 @@ function spotPopup(lat, lon, name) {
   el.style.top = `${Math.min(window.innerHeight - 180, ((1 - w.y) / 2) * window.innerHeight + 12)}px`;
   el.hidden = false;
   el.querySelector('button').addEventListener('click', () => setSite({ name: name ?? `${fmtLat(lat)} ${fmtLon(lon)}`, lat, lon }, true));
+  el.querySelector('[data-act="report"]').addEventListener('click', () => {
+    repTarget = { name: name ?? `${fmtLat(lat)} ${fmtLon(lon)}`, lat, lon };
+    lastGng = 0;
+    openWin('report', false);
+  });
 }
 
 // ---------- location ----------
@@ -419,6 +427,8 @@ async function setSite(site, stand = false, look = true) {
   const job = ++siteJob;
   S.site = { name: site.name, lat: +site.lat, lon: +site.lon };
   store.set('site', S.site);
+  repTarget = null;
+  lastGng = 0; lastRep = 0;
   select(null);
   $('busy').hidden = false;
   $('busyTitle').textContent = `Building the landscape at ${S.site.name}`;
@@ -458,6 +468,224 @@ function lookAround() {
   else surface.lookAt(12, S.site.lat < 0 ? 0 : 180, 70);
 }
 
+// ---------- site report ----------
+// Conditions at a spot (where you stand, or a spot picked in orbit view) with go / no-go lights,
+// the next 30 days, a slope and shadow map of the ground around it, and live space weather.
+let env = null;
+loadEnv().then((e) => { env = e; lastGng = 0; });
+let swData = null, swAt = 0, lastGng = 0, lastRep = 0;
+function refreshSpaceWeather() {
+  if (Date.now() - swAt < 5 * 60e3) return;
+  swAt = Date.now();
+  spaceWeather().then((v) => { swData = v; lastGng = 0; lastRep = 0; }).catch(() => { swData = { ok: false }; });
+}
+// Live feeds describe the present; within a few hours of now they apply.
+const isLive = () => Math.abs(S.t - Date.now()) < 3 * 3600e3;
+let repTarget = null; // a spot picked in orbit view; null means where you stand
+const target = () => repTarget ?? S.site;
+const builtHere = (t) => !!surface?.landscape?.ready && surface.landscape.site.lat === t.lat && surface.landscape.site.lon === t.lon;
+const skylineFor = (t) => (builtHere(t) && S.show.ground ? (az) => surface.landscape.horizonAt(az) : () => 0);
+const VERDICT = { go: 'GO', caution: 'CAUTION', nogo: 'NO GO', none: 'NO DATA' };
+const fmtC = (c) => `${c > 0 ? '+' : ''}${Math.round(c)} °C`;
+const fmtIn = (ms) => { const h = ms / 3600e3; return h < 48 ? `${Math.round(h)} h` : `${(h / 24).toFixed(1)} days`; };
+
+let tlCache = null;
+function monthAhead(t) {
+  const h0 = Math.floor(S.t / 3600e3) * 3600e3;
+  const key = `${t.lat},${t.lon},${h0},${builtHere(t)},${S.show.ground}`;
+  if (tlCache?.key === key) return tlCache.v;
+  const v = timeline(env, t, new Date(h0), { days: 30, stepH: 1, skyline: skylineFor(t) });
+  tlCache = { key, v };
+  return v;
+}
+
+function conditions(t) {
+  const date = new Date(S.t);
+  const sp = subPoints(date);
+  const built = builtHere(t);
+  const obs = observerAt(date, { lat: t.lat, lon: t.lon, hM: (built ? S.siteH : 0) + EYE_M });
+  const bodies = solarSystem(obs);
+  const sun = bodies.find((x) => x.id === 'sun'), earth = bodies.find((x) => x.id === 'earth');
+  const sky = skylineFor(t);
+  const sunAbove = sun.alt + 0.27 > sky(sun.az);
+  // The exact spot can sit in the shadow of a nearby rise even with the Sun above the skyline.
+  const lit = built && sunAbove ? surface.landscape.sunlit(0, 0, 0.3, sun) : sunAbove ? 1 : 0;
+  const sunUp = lit > 0.5;
+  const earthMargin = earth.alt - sky(earth.az);
+  const earthUp = earthMargin + 0.95 > 0;
+  const hour = localHour(date, t.lon, sp);
+  const temp = temperatureK(env, t.lat, t.lon, hour);
+  const tl = monthAhead(t);
+  const next = (pred) => tl.find((r, k) => k > 0 && pred(r))?.t ?? null;
+  const ev = {
+    sunset: tl[0].sunUp ? next((r) => !r.sunUp) : null, sunrise: !tl[0].sunUp ? next((r) => r.sunUp) : null,
+    earthSet: tl[0].earthUp ? next((r) => !r.earthUp) : null, earthRise: !tl[0].earthUp ? next((r) => r.earthUp) : null,
+    tailIn: !tl[0].tail ? next((r) => r.tail) : null, tailOut: tl[0].tail ? next((r) => !r.tail) : null,
+  };
+  const slope = built ? surface.landscape.slopeAt(0, 0) : terrain ? terrain.surface(t.lat, t.lon).slope : null;
+  const rocks = rockFraction(env, t.lat, t.lon);
+  const temps = tl.map((r) => r.tempK).filter((k) => k != null);
+  const sunHours14 = tl.slice(0, 14 * 24).filter((r) => r.sunUp).length;
+  const a = assess({ sunUp, sunAlt: sun.alt, setsInH: ev.sunset ? (ev.sunset - S.t) / 3600e3 : null, tempC: temp ? temp.k - K0 : null,
+    earthUp, earthMargin, slope, rocks, sw: swData, live: isLive() });
+  return { t, date, sun, earth, sunAbove, lit, sunUp, earthMargin, earthUp, hour, temp, tl, ev, slope, built, rocks, temps, sunHours14, a };
+}
+const K0 = 273.15;
+
+function renderGng() {
+  const el = $('gng');
+  if (!env || !frameState || !terrain) { el.hidden = true; return; }
+  const c = conditions(target());
+  el.hidden = false;
+  el.innerHTML = `<div class="head"><span>${esc(target().name.split(',')[0])}</span><span class="verdict ${c.a.overall}">${VERDICT[c.a.overall]}</span></div>`
+    + c.a.items.map(([k, l, txt]) => `<div class="row"><i class="lt ${l}"></i><span>${k}</span><span>${esc(txt)}</span></div>`).join('')
+    + '<div class="more">Open the full site report [R]</div>';
+}
+$('gng').addEventListener('click', () => openWin('report', false));
+
+function renderReport() {
+  if (!env || !frameState || !terrain) { $('repBody').innerHTML = '<p>Loading NASA data</p>'; return; }
+  const t = target(), c = conditions(t);
+  $('repTitle').textContent = `Site report: ${t.name}`;
+  if (!$('repBody').querySelector('.rep')) {
+    $('repBody').innerHTML = `<div class="rep">
+      <div class="grid2"><div id="repLights"></div><div id="repFacts"></div></div>
+      <div><h3>The next 30 days here</h3><div id="repTl"></div><p class="note">Click the chart to jump to that moment. Yellow: Sun above the local skyline. Blue: Earth in view (direct radio). Purple: inside Earth's magnetotail. Line: Diviner surface temperature, with the band from -100 to +100 °C shaded.</p></div>
+      <div><h3>Ground around this spot now</h3><div id="repMap"></div></div>
+      <div><h3>Space weather</h3><div id="repSw"></div></div>
+      <div class="note" id="repNotes"></div>
+    </div>`;
+    $('repTl').addEventListener('click', (e) => {
+      const svg = $('repTl').querySelector('svg');
+      if (!svg || !tlCache) return;
+      const r = svg.getBoundingClientRect();
+      const i = Math.round(((e.clientX - r.left) / r.width) * 764 - 40);
+      if (i < 0) return;
+      const row = tlCache.v[Math.max(0, Math.min(tlCache.v.length - 1, i))];
+      S.t = row.t; lastLight = 0; riseCache = null; lastRep = 0; lastGng = 0;
+    });
+    $('repMap').addEventListener('click', (e) => { if (e.target.dataset.act === 'stand') setSite(target(), true); });
+  }
+  const at = (ms) => (ms ? `${fmtShort(new Date(ms))} (in ${fmtIn(ms - S.t)})` : 'not within 30 days');
+  $('repLights').innerHTML = `<h3>Go / no-go now <span class="verdict ${c.a.overall}">${VERDICT[c.a.overall]}</span></h3>
+    <div class="lights">${c.a.items.map(([k, l, txt]) => `<div><i class="lt ${l}"></i><b>${k}</b><span>${esc(txt)}</span></div>`).join('')}</div>
+    <p class="note">${fmtShort(c.date)}. Planning limits used: Sun up and not setting within 24 h; surface between -100 and +100 °C (suit limits about -160 and +120 °C); no solar proton storm; Earth above the skyline; slope under 8° and rocks under 1% for landing (15° and 3% hard limits). Illustrative values for this prototype, not an agency rule.</p>`;
+  const tmin = Math.min(...c.temps) - K0, tmax = Math.max(...c.temps) - K0;
+  $('repFacts').innerHTML = `<h3>Conditions</h3><div class="facts">
+    <b>Place</b><span>${fmtLat(t.lat)} ${fmtLon(t.lon)}${c.built ? `, ${Math.round(S.siteH)} m` : ''}</span>
+    <b>Local solar time</b><span>${String(Math.floor(c.hour)).padStart(2, '0')}:${String(Math.floor((c.hour % 1) * 60)).padStart(2, '0')} (noon when the Sun is highest)</span>
+    <b>Sun</b><span>${c.sun.alt.toFixed(1)}° up, azimuth ${c.sun.az.toFixed(0)}°${c.sunAbove && !c.sunUp ? ', but this spot is in the shadow of nearby ground' : ''}</span>
+    <b>${c.tl[0].sunUp ? 'Sunset' : 'Sunrise'}</b><span>${c.tl[0].sunUp ? (c.ev.sunset ? at(c.ev.sunset) : 'not within 30 days: continuous sunlight') : (c.ev.sunrise ? at(c.ev.sunrise) : 'not within 30 days: continuous darkness')}</span>
+    <b>Sunlight, next 14 days</b><span>${c.sunHours14} of 336 hours (solar power)</span>
+    <b>Earth</b><span>${c.earth.alt.toFixed(1)}° up, ${c.earthUp ? 'in view' : 'hidden'}; ${c.ev.earthSet ? `sets ${at(c.ev.earthSet)}` : c.ev.earthRise ? `rises ${at(c.ev.earthRise)}` : 'stays in view all month'}</span>
+    <b>Surface temperature</b><span>${c.temp ? `${fmtC(c.temp.k - K0)} now; ${fmtC(tmin)} to ${fmtC(tmax)} this month` : 'no data'}<br><span class="sub">${c.temp ? esc(c.temp.src) : ''}, measured 2009 to 2015</span></span>
+    <b>Rocks over 1 m</b><span>${c.rocks != null ? `${(c.rocks * 100).toFixed(1)}% of the ground (Diviner; typical mare 0.5%)` : 'no Diviner rock map poleward of 60°'}</span>
+    <b>Slope here</b><span>${c.slope != null ? `${c.slope.toFixed(1)}°${c.built ? ` over ${Math.round(surface.landscape.grid.cell * 2)} m (LOLA / SLDEM2015)` : ' (coarse; stand here for the measured slope)'}` : 'loading'}</span>
+    <b>Magnetotail</b><span>${c.tl[0].tail ? `inside now, leaves ${at(c.ev.tailOut)}` : `outside, enters ${at(c.ev.tailIn)}`}</span>
+  </div>`;
+  $('repTl').innerHTML = timelineSvg(c.tl);
+  renderHazardMap(c);
+  renderSpaceWeather(c);
+  $('repNotes').innerHTML = `Sources: surface temperature from the LRO Diviner radiometer by local solar time (Williams et al. 2017); rock cover from Diviner (Bandfield et al. 2011); heights from LOLA and SLDEM2015; Sun and Earth from astronomy-engine; space weather from NOAA SWPC (GOES satellites) and NASA DONKI, fetched live. Diviner temperatures are averages over each bin: a shadowed crater floor inside it is colder, a Sun-facing slope warmer.`;
+}
+
+function timelineSvg(tl) {
+  // 720 hours across, after a gutter for the row names.
+  const G = 40, W = 720, rowY = { sun: 14, earth: 30, tail: 44 }, top = 58, H = 170, tH = H - top - 18;
+  const yT = (c) => top + tH * (1 - (c + 200) / 340);
+  let sun = '', earth = '', tail = '', line = '';
+  tl.forEach((r, i) => {
+    if (i >= W) return;
+    const x = G + i;
+    if (r.sunUp) sun += `M${x},${rowY.sun}h1`;
+    if (r.earthUp) earth += `M${x},${rowY.earth}h1`;
+    if (r.tail) tail += `M${x},${rowY.tail}h1`;
+    if (r.tempK != null) line += `${line ? 'L' : 'M'}${x},${yT(r.tempK - K0).toFixed(1)}`;
+  });
+  let ticks = '';
+  for (let d = 0; d <= 30; d++) {
+    const x = G + d * 24;
+    ticks += `<path d="M${x},${top - 4}v${tH + 8}" stroke="${d % 5 ? '#2c2c30' : '#444'}" stroke-width="1"/>`;
+    if (d % 5 === 0 && d < 30) ticks += `<text x="${x + 3}" y="${H - 4}" fill="#999" font-size="10">${fmtShort(new Date(tl[0].t + d * DAY)).slice(5, 10)}</text>`;
+  }
+  const lab = (y, t) => `<text x="${G - 5}" y="${y + 3.5}" fill="#aaa" font-size="10" text-anchor="end">${t}</text>`;
+  return `<svg class="tl" viewBox="0 0 ${G + W + 4} ${H}" role="img" aria-label="Sunlight, Earth visibility, magnetotail and temperature over the next 30 days">
+    ${ticks}
+    <rect x="${G}" y="${yT(100)}" width="${W}" height="${yT(-100) - yT(100)}" fill="rgba(63,191,106,0.10)"/>
+    ${lab(rowY.sun, 'Sun')}${lab(rowY.earth, 'Earth')}${lab(rowY.tail, 'Tail')}${lab(yT(100), '+100°')}${lab(yT(0), '0°C')}${lab(yT(-100), '-100°')}
+    <path d="${sun}" stroke="#f2c14e" stroke-width="10"/><path d="${earth}" stroke="#5aa0e8" stroke-width="10"/><path d="${tail}" stroke="#9b6bd6" stroke-width="6"/>
+    <path d="${line}" fill="none" stroke="#ff8a5c" stroke-width="1.8"/>
+    <path d="M${G + 0.5},4v${H - 12}" stroke="#fff" stroke-width="1.5"/><text x="${G + 4}" y="${top - 6}" fill="#fff" font-size="9">now</text>
+  </svg>`;
+}
+
+// Slope classes from the measured heights and the shadows of the Sun at this moment, north up.
+let mapJob = 0, mapKey = '';
+function renderHazardMap(c) {
+  const box = $('repMap');
+  if (!c.built) {
+    mapKey = '';
+    box.innerHTML = '<p>The slope and shadow map needs the local terrain. <button type="button" class="link" data-act="stand">Stand here to build it</button></p>';
+    return;
+  }
+  const L = surface.landscape, R = Math.min(4000, L.grid.Rg * 0.6), N = 160;
+  const key = `${c.t.lat},${c.t.lon},${c.sun.alt.toFixed(1)},${c.sun.az.toFixed(1)},${R}`;
+  if (key === mapKey && box.querySelector('canvas')) return;
+  mapKey = key;
+  box.innerHTML = `<div class="map"><canvas width="${N}" height="${N}" aria-label="Slope and shadow map"></canvas><div class="key">
+    <span><i style="background:#3fbf6a"></i>Under 8°: landing and walking</span>
+    <span><i style="background:#f0b429"></i>8 to 15°: walking with care</span>
+    <span><i style="background:#e5533f"></i>Over 15°: avoid</span>
+    <span><i style="background:#222"></i>Darker: in shadow now</span>
+    <span><i style="background:#fff;border-radius:50%"></i>You</span>
+    <span class="note">${(2 * R / 1000).toFixed(0)} km across, north up. Slopes over ${Math.round(L.grid.cell * 2)} m from LOLA / SLDEM2015; shadows ray-traced from the real Sun.</span></div></div>`;
+  const ctx = box.querySelector('canvas').getContext('2d');
+  const img = ctx.createImageData(N, N);
+  const job = ++mapJob, sun = c.sun;
+  let row = 0;
+  const step = () => {
+    if (job !== mapJob) return;
+    for (const end = Math.min(N, row + 16); row < end; row++) {
+      for (let col = 0; col < N; col++) {
+        const x = -R + ((col + 0.5) / N) * 2 * R, y = R - ((row + 0.5) / N) * 2 * R;
+        const s = L.slopeAt(x, y);
+        const base = s < 8 ? [63, 191, 106] : s < 15 ? [240, 180, 41] : [229, 83, 63];
+        const lit = sun.alt > -1 ? L.sunlit(x, y, L.gridAt(x, y) + 0.3, sun) : 0;
+        const k = 0.28 + 0.72 * lit;
+        const i = (row * N + col) * 4;
+        img.data[i] = base[0] * k; img.data[i + 1] = base[1] * k; img.data[i + 2] = base[2] * k; img.data[i + 3] = 255;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(N / 2, N / 2, 2.5, 0, 2 * Math.PI); ctx.fill();
+    if (row < N) setTimeout(step, 0);
+  };
+  step();
+}
+
+function renderSpaceWeather(c) {
+  const box = $('repSw');
+  const tail = `<p class="note">Background cosmic radiation on the surface: about 1.4 mSv per day dose equivalent, measured by Chang'e 4 (Zhang et al. 2020), around 200 times the dose on Earth's surface. The Moon has no atmosphere or magnetic field to stop it; a solar proton storm can add much more within hours, so crews need a shelter they can reach in time.</p>`;
+  if (!isLive()) {
+    box.innerHTML = `<p>Live space weather describes the present, and solar storms cannot be predicted more than a few days ahead, so there is none for ${fmtShort(c.date)}. Press <b>8</b> to come back to now.</p>${tail}`;
+    return;
+  }
+  refreshSpaceWeather();
+  const sw = swData;
+  if (!sw) { box.innerHTML = `<p>Fetching NOAA and NASA feeds</p>${tail}`; return; }
+  if (!sw.ok) { box.innerHTML = `<p>The live feeds (NOAA SWPC, NASA DONKI) could not be reached from this browser.</p>${tail}`; return; }
+  const s = sScale(sw.protons ?? 0);
+  box.innerHTML = `<div class="sw">
+    <span><b>Solar protons over 10 MeV:</b> ${(sw.protons ?? 0).toFixed(2)} pfu now, ${(sw.protonsMax ?? 0).toFixed(2)} at most in 24 h. ${s ? `<b style="color:#e5533f">Radiation storm S${s}</b>` : 'No radiation storm (S1 starts at 10 pfu).'}</span>
+    <span><b>Solar X-rays:</b> class ${flareClass(sw.xray)} now, ${flareClass(sw.xrayMax)} at most in 24 h.</span>
+    ${sw.flares ? `<span><b>Strong flares, last 7 days:</b> ${sw.flares.length ? sw.flares.map((f) => `${esc(f.cls)} (${esc(String(f.at).slice(5, 16).replace('T', ' '))})`).join(', ') : 'none of class M or X'}</span>` : ''}
+    ${sw.seps ? `<span><b>Solar energetic particle events, last 7 days:</b> ${sw.seps.length || 'none'}</span>` : ''}
+    ${sw.cmes != null ? `<span><b>Coronal mass ejections, last 7 days:</b> ${sw.cmes}</span>` : ''}
+    ${sw.s1Next3 ? `<span><b>NOAA forecast, chance of a radiation storm:</b> ${sw.s1Next3.join('%, ')}% over the next three days</span>` : ''}
+    <span class="note">GOES data as of ${esc(String(sw.protonsAt ?? '').replace('T', ' ').slice(0, 16))} UTC. Solar particles reach the Moon and Earth alike: GOES watches from near Earth.</span>
+  </div>${tail}`;
+}
+
 // ---------- windows ----------
 function openWin(name, toggle = true) {
   const w = $(`win-${name}`);
@@ -468,6 +696,7 @@ function openWin(name, toggle = true) {
     if (name === 'location') syncLocationWindow();
     if (name === 'datetime') syncDateWindow(true);
     if (name === 'search') { $('searchBox').focus(); renderSearch(); }
+    if (name === 'report') renderReport();
     // Bring to front.
     document.querySelectorAll('.win').forEach((x) => { x.style.zIndex = 10; });
     w.style.zIndex = 11;
@@ -647,9 +876,11 @@ $('configBody').innerHTML = `
 $('helpBody').innerHTML = `
   <h3>Two views</h3>
   <p><b>Standing on the surface</b>: you are 1.7 m above the real NASA terrain. Drag to look around, scroll to zoom, click any object for its details. <b>Orbit view</b>: the whole Moon lit by the real Sun at the chosen time; the S marker is where the Sun is overhead, the E marker where Earth is overhead. Click a spot and choose <b>Stand here</b>.</p>
+  <h3>Site report</h3>
+  <p>The panel at the top right gives a go / no-go for the place and time: light, surface temperature, radiation, contact with Earth and the ground. Click it (or press <kbd>R</kbd>) for the full report: measured temperatures from NASA's Diviner radiometer, rock cover, slopes, the next 30 days of sunlight, Earth visibility and temperature, a slope and shadow map of the ground around you, and live solar radiation alerts from NOAA and NASA. In orbit view, click any spot and choose <b>Site report</b>.</p>
   <h3>Keys (as in Stellarium)</h3>
   <table>
-    <tr><td><kbd>F1</kbd> Help · <kbd>F2</kbd> Data · <kbd>F3</kbd> Search · <kbd>F4</kbd> Sky options · <kbd>F5</kbd> Date/time · <kbd>F6</kbd> Location</td></tr>
+    <tr><td><kbd>F1</kbd> Help · <kbd>F2</kbd> Data · <kbd>F3</kbd> Search · <kbd>F4</kbd> Sky options · <kbd>F5</kbd> Date/time · <kbd>F6</kbd> Location · <kbd>F7</kbd> or <kbd>R</kbd> Site report</td></tr>
     <tr><td><kbd>J</kbd> slower / backwards · <kbd>K</kbd> real time / pause · <kbd>L</kbd> faster · <kbd>8</kbd> now</td></tr>
     <tr><td><kbd>-</kbd> / <kbd>=</kbd> one day back / forward · <kbd>[</kbd> / <kbd>]</kbd> one week · <kbd>Ctrl</kbd>+<kbd>-</kbd>/<kbd>=</kbd> one hour</td></tr>
     <tr><td><kbd>C</kbd> constellation lines · <kbd>V</kbd> names · <kbd>E</kbd> equatorial grid · <kbd>Z</kbd> azimuthal grid · <kbd>,</kbd> ecliptic</td></tr>
@@ -676,13 +907,13 @@ $('fullBtn').addEventListener('click', () => { if (document.fullscreenElement) d
 document.addEventListener('keydown', (e) => {
   if (e.target.closest('input, textarea, select')) { if (e.key === 'Escape') e.target.blur(); return; }
   const k = e.key;
-  const fn = { F1: 'help', F2: 'config', F3: 'search', F4: 'sky', F5: 'datetime', F6: 'location' }[k];
+  const fn = { F1: 'help', F2: 'config', F3: 'search', F4: 'sky', F5: 'datetime', F6: 'location', F7: 'report' }[k];
   if (fn) { e.preventDefault(); openWin(fn); return; }
   if (e.ctrlKey && (k === 'n' || k === 'N')) { e.preventDefault(); toggle('night'); return; }
   const step = (ms) => { S.t += ms; lastLight = 0; riseCache = null; };
   const map = {
     c: () => toggle('constLines'), v: () => toggle('constNames'), e: () => toggle('eqGrid'), z: () => toggle('azGrid'), ',': () => toggle('ecliptic'),
-    g: () => toggle('ground'), q: () => toggle('cardinals'), m: () => toggle('milkyWay'), p: () => toggle('planetLabels'), a: () => toggle('glare'), b: () => toggle('bright'),
+    g: () => toggle('ground'), q: () => toggle('cardinals'), m: () => toggle('milkyWay'), p: () => toggle('planetLabels'), a: () => toggle('glare'), b: () => toggle('bright'), r: () => openWin('report'),
     o: () => setView(S.view === 'surface' ? 'orbit' : 'surface'),
     j: () => faster(-1), l: () => faster(1), k: () => $('tPlay').click(), 8: setNow,
     '-': () => step(e.ctrlKey ? -3600e3 : -DAY), '=': () => step(e.ctrlKey ? 3600e3 : DAY), '[': () => step(-7 * DAY), ']': () => step(7 * DAY),

@@ -53,6 +53,7 @@ export class Landscape {
 
   // close: optional finer height patch around a named place ({ half, at(x, y) } in local metres).
   async build(terrain, site, albedo, onProgress, close = null) {
+    this.ready = false;
     await terrain.loadAround([site], FAR_M);
     await albedo?.prepare?.(site.lat, site.lon, FAR_M);
     const tH0 = terrain.height(site.lat, site.lon);
@@ -189,6 +190,7 @@ export class Landscape {
       this.group.add(rocks);
     }
     this.lastSun = null;
+    this.ready = true;
     onProgress?.(1);
   }
 
@@ -233,6 +235,12 @@ export class Landscape {
   }
 
   gridAt(x, y) { return sampleGrid(this.grid, x, y); }
+  // Slope (deg) of the measured ground (no statistical craters) at a point, over one grid cell.
+  slopeAt(x, y) {
+    const c = this.grid.cell;
+    const dE = (this.gridAt(x + c, y) - this.gridAt(x - c, y)) / (2 * c), dN = (this.gridAt(x, y + c) - this.gridAt(x, y - c)) / (2 * c);
+    return Math.atan(Math.hypot(dE, dN)) / DEG;
+  }
   fineAt(x, y) { return sampleGrid(this.fine, x, y); }
 
   // Light the ground for the Sun at (alt, az) and Earth (earthshine) with its phase and altitude.

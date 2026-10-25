@@ -18,8 +18,12 @@
     <!-- Selected object information, top left (as in Stellarium) -->
     <section id="info" class="info" aria-live="polite" hidden></section>
 
+    <!-- Go / no-go summary for the place and time, top right; click for the full site report -->
+    <button type="button" class="gng" id="gng" title="Site report [R]" hidden></button>
+
     <!-- Left bar: windows -->
     <nav class="leftbar" id="leftbar" aria-label="Windows">
+      <button type="button" data-win="report" title="Site report: conditions, risks and the month ahead [R]"><svg viewBox="0 0 32 32"><rect x="7" y="5" width="18" height="23" rx="2"/><path d="M12 5V3h8v2M11 12h10M11 17h10M11 22h6"/></svg></button>
       <button type="button" data-win="location" title="Location window [F6]"><svg viewBox="0 0 32 32"><circle cx="16" cy="13" r="5"/><path d="M16 29s-10-8.5-10-16a10 10 0 0 1 20 0c0 7.5-10 16-10 16Z"/></svg></button>
       <button type="button" data-win="datetime" title="Date/time window [F5]"><svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="12"/><path d="M16 8v8l6 4"/></svg></button>
       <button type="button" data-win="sky" title="Sky and viewing options window [F4]"><svg viewBox="0 0 32 32"><path d="M4 22c4-8 20-8 24 0"/><path d="M16 6v3M8 9l2 2M24 9l-2 2M4 26h24"/><circle cx="16" cy="17" r="3"/></svg></button>
@@ -98,6 +102,11 @@
         <input id="searchBox" type="search" placeholder="Sirius, Jupiter, Earth, Orion, Apollo 15" autocomplete="off">
         <ul class="list" id="searchList"></ul>
       </div>
+    </section>
+
+    <section class="win report" id="win-report" hidden aria-label="Site report">
+      <header><span id="repTitle">Site report</span><button type="button" class="x" aria-label="Close">×</button></header>
+      <div class="body" id="repBody"></div>
     </section>
 
     <section class="win wide" id="win-config" hidden aria-label="Data and accuracy">
