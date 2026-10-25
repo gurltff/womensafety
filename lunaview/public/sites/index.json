@@ -1,0 +1,126 @@
+{
+ "apollo-11": [
+  {
+   "file": "LRO_A11_lg.jpg",
+   "kind": "photo",
+   "caption": "The Apollo 11 landing site from 50 km up: the descent stage left on the surface, and West crater to the east.",
+   "credit": "NASA/GSFC/Arizona State University, LRO Narrow Angle Camera (SVS 10595)",
+   "source": "https://svs.gsfc.nasa.gov/vis/a010000/a010500/a010595/LRO_A11_lg.jpg"
+  }
+ ],
+ "apollo-14": [
+  {
+   "file": "LRO_A14_lg.jpg",
+   "kind": "photo",
+   "caption": "The Apollo 14 site at Fra Mauro: the Antares descent stage, the ALSEP experiments and Cone crater, with the astronauts' foot trails.",
+   "credit": "NASA/GSFC/Arizona State University, LRO Narrow Angle Camera (SVS 10595)",
+   "source": "https://svs.gsfc.nasa.gov/vis/a010000/a010500/a010595/LRO_A14_lg.png"
+  }
+ ],
+ "lunokhod-1": [
+  {
+   "file": "LRO_lunakhod1_lg.jpg",
+   "kind": "photo",
+   "caption": "Lunokhod 1 (arrow), the Soviet rover found again by LRO in 2010, 40 years after it landed.",
+   "credit": "NASA/GSFC/Arizona State University, LRO Narrow Angle Camera (SVS 10595)",
+   "source": "https://svs.gsfc.nasa.gov/vis/a010000/a010500/a010595/LRO_lunakhod1_lg.jpg"
+  }
+ ],
+ "copernicus": [
+  {
+   "file": "2162_H3_crop_8bit.jpg",
+   "kind": "photo",
+   "caption": "Inside Copernicus crater, photographed by Lunar Orbiter 2 in November 1966: the \"picture of the century\".",
+   "credit": "NASA / Lunar Orbiter Image Recovery Project, Lunar Orbiter 2 frame 2162 H3 (SVS 30128)",
+   "source": "https://svs.gsfc.nasa.gov/vis/a030000/a030100/a030128/2162_H3_crop_8bit.jpg"
+  }
+ ],
+ "apollo-15": [
+  {
+   "file": "pan_0885_print.jpg",
+   "kind": "render",
+   "caption": "Hadley Rille and the Apennine front around the Apollo 15 landing site, with Hadley Delta on the left.",
+   "credit": "NASA Goddard SVS, rendered from LRO LOLA heights and LROC images (SVS 4918)",
+   "source": "https://svs.gsfc.nasa.gov/vis/a000000/a004900/a004918/pan.0885_print.jpg"
+  }
+ ],
+ "apollo-16": [
+  {
+   "file": "apollo16_1800_print.jpg",
+   "kind": "render",
+   "caption": "The Apollo 16 site in the Descartes highlands, with the astronauts' traverses and North Ray crater.",
+   "credit": "NASA Goddard SVS, rendered from LRO data (SVS 4989)",
+   "source": "https://svs.gsfc.nasa.gov/vis/a000000/a004900/a004989/apollo16.1800_print.jpg"
+  }
+ ],
+ "apollo-17": [
+  {
+   "file": "compare_taurus_littrow.jpg",
+   "kind": "render",
+   "caption": "The Taurus-Littrow valley of Apollo 17, with the routes driven on the lunar rover.",
+   "credit": "NASA Goddard SVS, Tour of the Moon, from LRO data (SVS 4619)",
+   "source": "https://svs.gsfc.nasa.gov/vis/a000000/a004600/a004619/compare_taurus_littrow.tif"
+  }
+ ],
+ "tycho": [
+  {
+   "file": "compare_tycho.jpg",
+   "kind": "render",
+   "caption": "Tycho crater, 85 km across, with its central peak, seen obliquely.",
+   "credit": "NASA Goddard SVS, Tour of the Moon, from LRO data (SVS 4619)",
+   "source": "https://svs.gsfc.nasa.gov/vis/a000000/a004600/a004619/compare_tycho.tif"
+  }
+ ],
+ "shackleton-rim": [
+  {
+   "file": "sp_illum_1deg.jpg",
+   "kind": "map",
+   "caption": "How often each part of the south pole is sunlit (white: almost always, black: never). Shackleton crater is the round black floor at the centre.",
+   "credit": "NASA Goddard SVS, LOLA average illumination (SVS 4770)",
+   "source": "https://svs.gsfc.nasa.gov/vis/a000000/a004700/a004770/sp_illum_1deg.tif"
+  },
+  {
+   "file": "shackleton_earth_0001_print.jpg",
+   "kind": "render",
+   "caption": "Earth low on the horizon above the Shackleton rim, as it always stays from the south pole.",
+   "credit": "NASA Goddard SVS, rendered from LOLA heights (SVS 4944)",
+   "source": "https://svs.gsfc.nasa.gov/vis/a000000/a004900/a004944/shackleton_earth.0001_print.jpg"
+  }
+ ],
+ "connecting-ridge": [
+  {
+   "file": "sp_illum_1deg.jpg",
+   "kind": "map",
+   "caption": "How often each part of the south pole is sunlit (white: almost always, black: never). Shackleton crater is the round black floor at the centre.",
+   "credit": "NASA Goddard SVS, LOLA average illumination (SVS 4770)",
+   "source": "https://svs.gsfc.nasa.gov/vis/a000000/a004700/a004770/sp_illum_1deg.tif"
+  }
+ ],
+ "de-gerlache-rim": [
+  {
+   "file": "sp_illum_1deg.jpg",
+   "kind": "map",
+   "caption": "How often each part of the south pole is sunlit (white: almost always, black: never). Shackleton crater is the round black floor at the centre.",
+   "credit": "NASA Goddard SVS, LOLA average illumination (SVS 4770)",
+   "source": "https://svs.gsfc.nasa.gov/vis/a000000/a004700/a004770/sp_illum_1deg.tif"
+  }
+ ],
+ "malapert-massif": [
+  {
+   "file": "sp_illum_1deg.jpg",
+   "kind": "map",
+   "caption": "How often each part of the south pole is sunlit (white: almost always, black: never). Shackleton crater is the round black floor at the centre.",
+   "credit": "NASA Goddard SVS, LOLA average illumination (SVS 4770)",
+   "source": "https://svs.gsfc.nasa.gov/vis/a000000/a004700/a004770/sp_illum_1deg.tif"
+  }
+ ],
+ "mons-mouton": [
+  {
+   "file": "sp_illum_1deg.jpg",
+   "kind": "map",
+   "caption": "How often each part of the south pole is sunlit (white: almost always, black: never). Shackleton crater is the round black floor at the centre.",
+   "credit": "NASA Goddard SVS, LOLA average illumination (SVS 4770)",
+   "source": "https://svs.gsfc.nasa.gov/vis/a000000/a004700/a004770/sp_illum_1deg.tif"
+  }
+ ]
+}

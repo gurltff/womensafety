@@ -271,6 +271,7 @@ export class Landscape {
     for (const m of this.meshes) {
       const attr = m.geometry.attributes.shade, pos = m.geometry.attributes.position.array, s = attr.array;
       for (let v = 0; v < s.length; v++) s[v] = shadeOf(pos[v * 3], -pos[v * 3 + 2], pos[v * 3 + 1] + EYE_M);
+      if (m === this.mesh) this.smoothShade(s);
       attr.needsUpdate = true;
     }
     if (this.rocks) {
@@ -281,14 +282,34 @@ export class Landscape {
     }
   }
 
+  // Soften shadow edges on the dense mesh (centre vertex, then rings of NAZ_NEAR): average each
+  // vertex with its neighbours around and across the rings, so thin shadows do not alias into dashes.
+  smoothShade(s) {
+    const n = NAZ_NEAR, rings = (s.length - 1) / n, out = new Float32Array(s.length);
+    out[0] = s[0];
+    for (let r = 0; r < rings; r++) {
+      for (let k = 0; k < n; k++) {
+        const v = 1 + r * n + k;
+        let sum = s[v] * 2, w = 2;
+        sum += s[1 + r * n + ((k + 1) % n)] + s[1 + r * n + ((k + n - 1) % n)]; w += 2;
+        if (r > 0) { sum += s[v - n]; w++; }
+        if (r < rings - 1) { sum += s[v + n]; w++; }
+        out[v] = sum / w;
+      }
+    }
+    s.set(out);
+  }
+
   // Shadows the rocks cast on the near ground: each rock is treated as a mound of its own width and
   // height, and the ground behind it (away from the Sun) is dark for as far as its shadow reaches.
   rockShadows(sun) {
     const attr = this.mesh.geometry.attributes.shade, pos = this.mesh.geometry.attributes.position.array, s = attr.array;
     const ux = -Math.sin(sun.az * DEG), uy = -Math.cos(sun.az * DEG), tanEl = Math.tan(sun.alt * DEG);
     for (const r of this.rocks.userData.list) {
+      // Further out the ground mesh is too coarse to draw a rock's shadow without visible steps.
+      if (Math.hypot(r.x, r.y) > 90) continue;
       const rad = r.d * 0.45 * r.sx, top = r.d * 0.62 * r.sy * 0.75;
-      const L = Math.min(top / tanEl, r.d * 25);
+      const L = Math.min(top / tanEl, r.d * 15);
       const gz = this.fineAt(r.x, r.y);
       const x0 = Math.min(r.x, r.x + ux * L) - rad, x1 = Math.max(r.x, r.x + ux * L) + rad;
       const y0 = Math.min(r.y, r.y + uy * L) - rad, y1 = Math.max(r.y, r.y + uy * L) + rad;
@@ -323,12 +344,14 @@ export class Landscape {
     const top = Math.max(maxH, F.maxH) + 1;
     let block = -90;
     const d0 = Math.hypot(x, y);
+    // Metre-scale bumps only shade the ground close to the observer, where the mesh can show it.
+    const useFine = d0 < 300;
     if (d0 >= Rg * 0.98) block = this.farSkyAt(sun.az) - 0.5;
     else {
       let t = 0;
       for (;;) {
         const px = x + sx * t, py = y + sy * t;
-        const inFine = Math.abs(px) < F.Rg && Math.abs(py) < F.Rg;
+        const inFine = useFine && Math.abs(px) < F.Rg && Math.abs(py) < F.Rg;
         t += inFine ? F.cell : cell;
         const qx = x + sx * t, qy = y + sy * t;
         if (Math.abs(qx) >= Rg || Math.abs(qy) >= Rg) { block = Math.max(block, this.farSkyAt(sun.az)); break; }

@@ -152,25 +152,30 @@ export function flareClass(w) {
 //  margin to the -160 / +120 C limits; radiation: no proton storm (S1 is >= 10 pfu); contact:
 //  Earth above the local skyline; ground: slope under 8 deg and rocks under 1% for landing.
 export const level = { go: 'go', caution: 'caution', nogo: 'nogo', none: 'none' };
-export function assess({ sunUp, sunAlt, setsInH, tempC, earthUp, earthMargin, slope, rocks, sw, live }) {
+export function assess({ sunUp, sunAlt, setsInH, tempC, earthUp, earthAlt, earthMargin, slope, rocks, sw, live }) {
   const out = [];
-  out.push(['Light', !sunUp ? level.nogo : setsInH != null && setsInH < 24 ? level.caution : sunAlt < 5 ? level.caution : level.go,
-    !sunUp ? 'Night here: no solar power, extreme cold' : setsInH != null && setsInH < 24 ? `Sunset in ${setsInH.toFixed(0)} h` : sunAlt < 5 ? 'Sun very low: long shadows and glare' : 'Daylight']);
-  out.push(['Temperature', tempC == null ? level.none : tempC < -160 || tempC > 120 ? level.nogo : tempC < -100 || tempC > 100 ? level.caution : level.go,
-    tempC == null ? 'No Diviner data' : `${tempC > 0 ? '+' : ''}${tempC.toFixed(0)} °C on the surface`]);
-  let rad = level.none, radText = 'Live data covers the present only';
+  const signed = (v, d = 0) => `${v > 0 ? '+' : ''}${v.toFixed(d)}`;
+  out.push({ label: 'Sunlight', limit: 'up, >24 h to sunset',
+    level: !sunUp ? level.nogo : setsInH != null && setsInH < 24 ? level.caution : sunAlt < 5 ? level.caution : level.go,
+    reading: !sunUp ? `night (Sun ${signed(sunAlt, 1)}°)` : `el ${sunAlt.toFixed(1)}°${setsInH != null ? `, sets in ${setsInH < 48 ? `${setsInH.toFixed(0)} h` : `${(setsInH / 24).toFixed(1)} d`}` : ', no sunset in 30 d'}` });
+  out.push({ label: 'Surface temp', limit: '-100 to +100 °C',
+    level: tempC == null ? level.none : tempC < -160 || tempC > 120 ? level.nogo : tempC < -100 || tempC > 100 ? level.caution : level.go,
+    reading: tempC == null ? 'no data' : `${signed(tempC)} °C` });
+  let rad = level.none, radText = 'no live data for this date';
   if (live && sw?.ok) {
     const s = sScale(sw.protons ?? 0);
     rad = s >= 2 ? level.nogo : s === 1 || (sw.xray ?? 0) >= 1e-4 ? level.caution : level.go;
-    radText = s >= 1 ? `Solar proton storm S${s}: shelter` : (sw.xray ?? 0) >= 1e-4 ? `X-class flare in progress (${flareClass(sw.xray)})` : 'Quiet Sun: no proton storm';
-  } else if (live) radText = 'Live feed not reachable';
-  out.push(['Radiation', rad, radText]);
-  out.push(['Earth contact', earthUp ? (earthMargin < 3 ? level.caution : level.go) : level.nogo,
-    earthUp ? (earthMargin < 3 ? 'Earth just above the skyline' : 'Earth in view: direct radio link') : 'Earth below the skyline: relay satellite needed']);
-  out.push(['Ground', slope == null ? level.none : slope > 15 || (rocks ?? 0) > 0.03 ? level.nogo : slope > 8 || (rocks ?? 0) > 0.01 ? level.caution : level.go,
-    slope == null ? 'Stand here to measure the slope' : `Slope ${slope.toFixed(1)}°${rocks != null ? `, rocks ${(rocks * 100).toFixed(1)}%` : ''}`]);
+    radText = `${(sw.protons ?? 0).toFixed(1)} pfu${s ? ` (S${s} storm)` : ''}, X-ray ${flareClass(sw.xray)}`;
+  } else if (live) radText = 'feed unreachable';
+  out.push({ label: 'Radiation', limit: '<10 pfu (S1)', level: rad, reading: radText });
+  out.push({ label: 'Earth link', limit: 'Earth above skyline',
+    level: earthUp ? (earthMargin < 3 ? level.caution : level.go) : level.nogo,
+    reading: earthUp ? `Earth el ${earthAlt.toFixed(1)}°` : `Earth hidden (${signed(earthAlt, 1)}°)` });
+  out.push({ label: 'Ground', limit: 'slope <8°, rocks <1%',
+    level: slope == null ? level.none : slope > 15 || (rocks ?? 0) > 0.03 ? level.nogo : slope > 8 || (rocks ?? 0) > 0.01 ? level.caution : level.go,
+    reading: slope == null ? 'no data' : `${slope.toFixed(1)}°${rocks != null ? `, rocks ${(rocks * 100).toFixed(1)}%` : ''}` });
   const rank = { nogo: 3, caution: 2, go: 1, none: 0 };
-  const worst = out.reduce((a, r) => (rank[r[1]] > rank[a] ? r[1] : a), level.none);
+  const worst = out.reduce((acc, r) => (rank[r.level] > rank[acc] ? r.level : acc), level.none);
   return { items: out, overall: worst };
 }
 
